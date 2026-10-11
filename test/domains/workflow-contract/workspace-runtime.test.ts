@@ -42,6 +42,67 @@ afterEach(async () => {
 });
 
 describe('workspace runtime resolution and migration', () => {
+  it('validates the volume root without attempting mkdir when the root would reject it', async () => {
+    const volumeRoot = path.parse(data).root;
+    const mkdir = fs.mkdir.bind(fs);
+    const create = vi.spyOn(fs, 'mkdir').mockImplementation(async (directory, options) => {
+      if (path.resolve(String(directory)) === volumeRoot) {
+        throw Object.assign(new Error('EPERM: operation not permitted, mkdir volume root'), {
+          code: 'EPERM',
+        });
+      }
+      return mkdir(directory, options);
+    });
+    const stat = vi.spyOn(fs, 'lstat');
+    const runtime = await resolveWorkspaceRuntimeRoot(project);
+    expect(runtime).toBe(resolveWorkspaceRuntimeRootSync(project));
+    expect((await fs.stat(runtime)).isDirectory()).toBe(true);
+    expect(await isWorkspaceRuntimeMigrationFence(legacy, runtime)).toBe(true);
+    expect(stat).toHaveBeenCalledWith(volumeRoot);
+    expect(
+      create.mock.calls.some(([directory]) => path.resolve(String(directory)) === volumeRoot),
+    ).toBe(false);
+  });
+
+  it.each(['file', 'symlink'] as const)(
+    'rejects a nonphysical volume root reported as a %s before creating directories',
+    async (kind) => {
+      const volumeRoot = path.parse(data).root;
+      const rootStat = await fs.lstat(volumeRoot);
+      vi.spyOn(rootStat, 'isDirectory').mockReturnValue(kind !== 'file');
+      vi.spyOn(rootStat, 'isSymbolicLink').mockReturnValue(kind === 'symlink');
+      const lstat = fs.lstat.bind(fs);
+      const stat = vi.spyOn(fs, 'lstat').mockImplementation(async (file, options) => {
+        if (path.resolve(String(file)) === volumeRoot) return rootStat;
+        return lstat(file, options);
+      });
+      const mkdir = vi.spyOn(fs, 'mkdir');
+      await expect(resolveWorkspaceRuntimeRoot(project)).rejects.toThrow('必须是真实目录');
+      expect(stat).toHaveBeenCalledWith(volumeRoot);
+      expect(mkdir).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['ENOENT', 'EACCES', 'EPERM'] as const)(
+    'preserves a volume root lstat %s error without attempting mkdir',
+    async (code) => {
+      const volumeRoot = path.parse(data).root;
+      const error = Object.assign(new Error(`${code}: lstat volume root`), {
+        code,
+        path: volumeRoot,
+        syscall: 'lstat',
+      });
+      const lstat = fs.lstat.bind(fs);
+      vi.spyOn(fs, 'lstat').mockImplementation(async (file, options) => {
+        if (path.resolve(String(file)) === volumeRoot) throw error;
+        return lstat(file, options);
+      });
+      const mkdir = vi.spyOn(fs, 'mkdir');
+      await expect(resolveWorkspaceRuntimeRoot(project)).rejects.toBe(error);
+      expect(mkdir).not.toHaveBeenCalled();
+    },
+  );
+
   it('checks read-only fence ownership without following a foreign target', async () => {
     const runtime = await resolveWorkspaceRuntimeRoot(project);
     await expect(

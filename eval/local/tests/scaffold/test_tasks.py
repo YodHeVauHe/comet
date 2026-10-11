@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -941,6 +942,7 @@ def test_native_interrupted_transition_fixture_is_recovered_by_current_runtime(t
         get_tasks_dir().parents[2] / "assets/skills/comet-native/scripts/comet-native-runtime.mjs"
     )
     change = workspace / "docs/comet/changes/add-character-counting"
+    data_root = tmp_path / "comet-data"
 
     def run_native(*args: str, expected_exit: int = 0) -> dict:
         result = subprocess.run(
@@ -956,6 +958,7 @@ def test_native_interrupted_transition_fixture_is_recovered_by_current_runtime(t
             capture_output=True,
             text=True,
             timeout=30,
+            env={**os.environ, "COMET_DATA_DIR": str(data_root)},
         )
         assert result.returncode == expected_exit, result.stdout or result.stderr
         return json.loads(result.stdout)
@@ -990,8 +993,10 @@ def test_native_interrupted_transition_fixture_is_recovered_by_current_runtime(t
     repeated = run_native("doctor", "add-character-counting", "--repair")
     assert repeated["data"]["healthy"] is True
 
-    local_runtime = (
-        workspace / ".comet" / "runtime" / "native" / "changes" / "add-character-counting"
+    local_runtimes = list(
+        data_root.glob("workspaces/*/runtime/native/changes/add-character-counting")
     )
+    assert len(local_runtimes) == 1
+    local_runtime = local_runtimes[0]
     assert (local_runtime / "state.json").exists()
     assert not (local_runtime / "trajectory.jsonl").exists()

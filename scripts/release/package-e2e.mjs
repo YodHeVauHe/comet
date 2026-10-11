@@ -1139,11 +1139,11 @@ async function main() {
       );
     }
     const classicStateFile = await fs.readFile(
-      path.join(classicProjectDir, 'openspec', 'changes', classicSdkChange, '.comet.yaml'),
+      path.join(classicProjectDir, 'openspec', 'changes', classicSdkChange, 'comet-state.yaml'),
       'utf8',
     );
     if (!classicStateFile.includes('workflow: full') || !classicStateFile.includes('phase: open')) {
-      throw new Error('Packaged Classic SDK init did not retain .comet.yaml');
+      throw new Error('Packaged Classic SDK init did not create comet-state.yaml');
     }
     const classicSdkInspectFile = path.join(consumerDir, 'classic-sdk-inspect.json');
     await fs.writeFile(

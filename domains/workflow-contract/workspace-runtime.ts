@@ -124,7 +124,11 @@ async function assertRealDirectory(directory: string): Promise<void> {
 /** 逐级创建；已存在的链接、文件和设备均不能成为 Runtime 的父目录。 */
 async function ensureAbsoluteDirectory(directory: string): Promise<void> {
   const parent = path.dirname(directory);
-  if (parent !== directory) await ensureAbsoluteDirectory(parent);
+  if (parent === directory) {
+    await assertRealDirectory(directory);
+    return;
+  }
+  await ensureAbsoluteDirectory(parent);
   try {
     await fs.mkdir(directory, { mode: 0o700 });
   } catch (error) {
