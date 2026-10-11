@@ -6,18 +6,21 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { parse as parseYaml } from 'yaml';
 import {
+  resolveEvalExecution,
+  beginCliEvalTracking,
+  finishCliEvalTracking,
+  updateManagedEvalRun,
+  registerCliEvalRun,
   canonicalPath,
   isPathWithin,
   loadUserEvalEnvironment,
   resolveEvalContext,
   type ResolvedEvalContext,
 } from '../../domains/eval/index.js';
-import {
-  collectStandaloneTasks,
-  loadInstalledCustomAgent,
-} from '../../domains/eval/standalone-static-collect.js';
+import { collectStandaloneTasks } from '../../domains/eval/standalone-static-collect.js';
 import { recordRepositoryEvalExperiment } from '../../domains/bundle/eval-run-result.js';
 import { prepareEvalManifest } from '../../domains/bundle/eval-manifest-runtime.js';
+import { runOwnedCommand } from '../../platform/process/run-owned-command.js';
 
 type EvalSuite = 'local' | 'langsmith' | 'langfuse';
 type EvalAgent = string;
@@ -101,96 +104,11 @@ function resolveAgent(options: EvalCommandOptions): EvalAgent {
   );
 }
 
-function nonEmpty(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function manifestField(data: Record<string, unknown> | undefined, ...names: string[]): unknown {
-  if (!data) return undefined;
-  for (const name of names) {
-    if (Object.hasOwn(data, name)) return data[name];
-  }
-  return undefined;
-}
-
 async function resolveLaunchExecution(
   options: EvalCommandOptions,
   context: ResolvedEvalContext,
 ): Promise<Pick<EvalLaunchDetails, 'agent' | 'model' | 'api' | 'judge'>> {
-  let manifest: Record<string, unknown> | undefined;
-  if (context.manifestPath) {
-    const parsed = parseYaml(await fs.readFile(context.manifestPath, 'utf8')) as unknown;
-    manifest =
-      parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
-  }
-  const execution =
-    manifest?.execution && typeof manifest.execution === 'object'
-      ? (manifest.execution as Record<string, unknown>)
-      : undefined;
-  const manifestAgent = nonEmpty(manifestField(execution, 'agent')) as EvalAgent | undefined;
-  const mainAgent =
-    options.agent ??
-    manifestAgent ??
-    (nonEmpty(process.env.BENCH_EVAL_AGENT) as EvalAgent | undefined) ??
-    'claude-code';
-  const customAdapter = await loadInstalledCustomAgent(mainAgent);
-  const modelEnv: Partial<Record<EvalAgent, string[]>> = {
-    'claude-code': ['BENCH_CC_MODEL', 'ANTHROPIC_MODEL', 'BENCH_MODEL'],
-    codex: ['BENCH_CODEX_MODEL', 'OPENAI_MODEL', 'CODEX_MODEL', 'BENCH_MODEL'],
-    qoder: ['BENCH_QODER_MODEL', 'QODER_MODEL', 'BENCH_MODEL'],
-    codebuddy: ['BENCH_CODEBUDDY_MODEL', 'CODEBUDDY_MODEL', 'BENCH_MODEL'],
-  };
-  const baseUrlEnv: Partial<Record<EvalAgent, string[]>> = {
-    'claude-code': ['ANTHROPIC_BASE_URL', 'BENCH_BASE_URL'],
-    codex: ['OPENAI_BASE_URL', 'CODEX_BASE_URL', 'BENCH_BASE_URL'],
-    qoder: ['QODER_BASE_URL'],
-    codebuddy: ['CODEBUDDY_BASE_URL', 'BENCH_BASE_URL'],
-  };
-  const mainModel =
-    options.model ??
-    nonEmpty(manifestField(execution, 'model')) ??
-    (customAdapter?.modelEnv
-      ? nonEmpty(process.env[customAdapter.modelEnv])
-      : (modelEnv[mainAgent] ?? []).map((key) => nonEmpty(process.env[key])).find(Boolean)) ??
-    'default';
-  const mainBaseUrl =
-    options.baseUrl ??
-    nonEmpty(manifestField(execution, 'baseUrl', 'base_url')) ??
-    (customAdapter?.baseUrlEnv
-      ? nonEmpty(process.env[customAdapter.baseUrlEnv])
-      : (baseUrlEnv[mainAgent] ?? []).map((key) => nonEmpty(process.env[key])).find(Boolean));
-  const judgeManifest =
-    manifest?.judge && typeof manifest.judge === 'object'
-      ? (manifest.judge as Record<string, unknown>)
-      : undefined;
-  const judgeEnabled =
-    Boolean(judgeManifest) ||
-    Boolean(options.judgeAgent || options.judgeModel || options.judgeBaseUrl) ||
-    ['1', 'true', 'yes', 'on'].includes((process.env.BENCH_LLM_JUDGE ?? '').toLowerCase());
-  const judge: EvalLaunchDetails['judge'] = judgeEnabled
-    ? {
-        agent: (options.judgeAgent ??
-          (nonEmpty(manifestField(judgeManifest, 'agent')) as EvalAgent | undefined) ??
-          mainAgent) as EvalAgent,
-        model:
-          options.judgeModel ??
-          nonEmpty(manifestField(judgeManifest, 'model')) ??
-          nonEmpty(process.env.BENCH_JUDGE_MODEL) ??
-          'missing',
-        api:
-          (options.judgeBaseUrl ??
-          nonEmpty(manifestField(judgeManifest, 'baseUrl', 'base_url')) ??
-          nonEmpty(process.env.BENCH_JUDGE_BASE_URL))
-            ? 'custom'
-            : 'default',
-      }
-    : null;
-  return {
-    agent: mainAgent,
-    model: mainModel,
-    api: mainBaseUrl ? 'custom' : 'default',
-    judge,
-  };
+  return resolveEvalExecution(options, context);
 }
 
 function assertTarget(options: EvalCommandOptions): void {
@@ -377,6 +295,12 @@ async function buildEvalArgs(
   if (process.env.COMET_APPLICATION_EVAL_CONTEXT) {
     const evaluation = JSON.parse(process.env.COMET_APPLICATION_EVAL_CONTEXT);
     args.push('--count=1', `--agent-timeout=${evaluation.preview.settings.timeoutSeconds}`);
+    args.push(`--max-turns=${evaluation.preview.settings.maxTurns}`);
+  } else if (process.env.COMET_EVAL_MANAGED === '1') {
+    const timeout = Number(process.env.COMET_EVAL_MANAGED_TIMEOUT);
+    const turns = Number(process.env.COMET_EVAL_MANAGED_MAX_TURNS);
+    if (Number.isSafeInteger(timeout) && timeout >= 30) args.push(`--agent-timeout=${timeout}`);
+    if (Number.isSafeInteger(turns) && turns >= 1) args.push(`--max-turns=${turns}`);
   }
   args.push(`--project-root=${context.artifactOwnerRoot}`);
 
@@ -397,9 +321,10 @@ async function buildLaunchDetails(
 ): Promise<EvalLaunchDetails> {
   const suite = resolveSuite(options);
   const reportConfig = collectOnly ? null : await resolveReportConfig(options, context);
-  const experimentId = process.env.COMET_APPLICATION_EVAL_CONTEXT
-    ? process.env.COMET_EVAL_EXPERIMENT_ID!
-    : `comet-eval-${randomUUID()}`;
+  const experimentId =
+    process.env.COMET_APPLICATION_EVAL_CONTEXT || process.env.COMET_EVAL_MANAGED === '1'
+      ? process.env.COMET_EVAL_EXPERIMENT_ID!
+      : `comet-eval-${randomUUID()}`;
   if (!/^[a-zA-Z0-9][a-zA-Z0-9-]{0,127}$/u.test(experimentId)) throw new Error('评估实验身份无效');
   const execution = await resolveLaunchExecution(options, context);
   const taskLines = await collectStandaloneTasks(
@@ -485,7 +410,7 @@ function assertUvAvailable(): void {
   }
 }
 
-function runEval(
+async function runEval(
   args: string[],
   root: string,
   suite: EvalSuite,
@@ -494,18 +419,27 @@ function runEval(
   uvCacheDir: string,
   uvProjectEnvironment: string,
   reportHtml: boolean,
-): void {
+): Promise<void> {
   assertEvalHarness(root, suite);
   // Validate the owner boundary immediately before uv can create its cache or environment.
   // The context was validated during resolution and is rechecked in the Python harness before writes.
   assertUvAvailable();
-  execFileSync('uv', args, {
+  await runOwnedCommand('uv', args, {
     cwd: root,
-    stdio: 'inherit',
+    streamOutput: true,
+    onRegistered:
+      process.env.COMET_EVAL_MANAGED !== '1' && !process.env.COMET_APPLICATION_EVAL_CONTEXT
+        ? async (child) => {
+            await updateManagedEvalRun(context.artifactOwnerRoot, experimentId, (current) => {
+              current.child = child;
+            });
+          }
+        : undefined,
     env: {
       ...process.env,
       COMET_EVAL_EXPERIMENT_ID: experimentId,
       COMET_EVAL_CONTEXT: JSON.stringify(context),
+      COMET_EVAL_PROGRESS_ENABLED: '1',
       PYTHONDONTWRITEBYTECODE: '1',
       PYTEST_ADDOPTS: [process.env.PYTEST_ADDOPTS, '-p no:cacheprovider'].filter(Boolean).join(' '),
       UV_CACHE_DIR: uvCacheDir,
@@ -537,13 +471,30 @@ async function executeEval(options: EvalCommandOptions, collectOnly: boolean): P
   let bodyError: unknown;
   let cleanupFailed = false;
   let cleanupError: unknown;
+  const trackCli =
+    process.env.COMET_EVAL_MANAGED !== '1' && !process.env.COMET_APPLICATION_EVAL_CONTEXT;
+  if (trackCli) {
+    await beginCliEvalTracking(context, details.experimentId, {
+      target: options.manifest ? context.manifestPath! : context.skillRoot,
+      targetType: 'skill',
+      agent: details.agent ?? undefined,
+      ...(details.model !== 'default' ? { model: details.model } : {}),
+      suite: details.suite,
+      ...(options.task ? { task: options.task } : {}),
+      ...(options.quick ? { quick: true } : {}),
+      ...(options.profile ? { profile: options.profile } : {}),
+      ...(details.judge
+        ? { judgeAgent: details.judge.agent, judgeModel: details.judge.model, judgeEnabled: true }
+        : { judgeEnabled: false }),
+    });
+  }
   try {
     const runtimeContext = prepared
       ? { ...context, manifestPath: await canonicalPath(prepared.path) }
       : context;
     const args = await buildEvalArgs(options, runtimeContext, details.reportConfig);
     printLaunchDetails(details);
-    runEval(
+    await runEval(
       args,
       root,
       details.suite,
@@ -579,6 +530,12 @@ async function executeEval(options: EvalCommandOptions, collectOnly: boolean): P
       cleanupFailed = true;
       cleanupError = error;
     }
+    if (trackCli)
+      await finishCliEvalTracking(
+        context.artifactOwnerRoot,
+        details.experimentId,
+        bodyError ?? cleanupError,
+      );
   }
   if (bodyFailed) throw bodyError;
   if (cleanupFailed) throw cleanupError;
@@ -633,19 +590,53 @@ export async function evalCommand(
       },
     };
     const preview = await previewWorkflowApplicationEval(input);
-    console.log(
-      JSON.stringify(
-        options.collect
-          ? preview
-          : await runWorkflowApplicationEval({
-              ...input,
-              confirmationHash: preview.confirmationHash,
-              experimentId: `comet-eval-${randomUUID()}`,
-            }),
-        null,
-        2,
-      ),
-    );
+    if (options.collect) {
+      console.log(JSON.stringify(preview, null, 2));
+      return;
+    }
+    const experimentId = `comet-eval-${randomUUID()}`;
+    const trackCli = process.env.COMET_EVAL_MANAGED !== '1';
+    if (trackCli)
+      await registerCliEvalRun(input.projectRoot, {
+        id: experimentId,
+        status: 'generating',
+        targetId: preview.application.id,
+        contentHash: preview.application.contentHash,
+        previewHash: preview.confirmationHash,
+        config: {
+          target: input.file,
+          targetType: 'application',
+          ...preview.settings,
+          suite: 'local',
+        },
+      });
+    let executionError: unknown;
+    try {
+      const result = await runWorkflowApplicationEval({
+        ...input,
+        confirmationHash: preview.confirmationHash,
+        experimentId,
+        executeCommand: trackCli
+          ? (command, args, execution) =>
+              runOwnedCommand(command, args, {
+                cwd: execution?.cwd ?? input.projectRoot,
+                env: execution?.env ?? process.env,
+                timeoutMs: execution?.timeoutMs,
+                onRegistered: async (child) => {
+                  await updateManagedEvalRun(input.projectRoot, experimentId, (current) => {
+                    current.child = child;
+                  });
+                },
+              })
+          : undefined,
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error) {
+      executionError = error;
+      throw error;
+    } finally {
+      if (trackCli) await finishCliEvalTracking(input.projectRoot, experimentId, executionError);
+    }
     return;
   }
   const resolvedOptions = optionsWithTarget(target, options);

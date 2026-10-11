@@ -4771,3 +4771,184 @@ test('scrolls a long project memory list inside the knowledge page', async ({ pa
       .toBe(true);
   }
 });
+
+for (const scenario of ['stable reads', 'loading spacing'] as const) {
+  test(`project memory detail ${scenario}`, async ({ page }) => {
+    let reads = 0;
+    let holdReads = scenario === 'loading spacing';
+    let releaseRead: () => void = () => {};
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const entries = Array.from({ length: 2 }, (_, index) => ({
+      slug: `memory-${String(index + 1).padStart(2, '0')}`,
+      title: `项目记忆 ${index + 1}`,
+      description: '用于验证项目记忆条数过多时，列表可以沿用 Dashboard 内页滚动查看。',
+      type: 'procedure',
+      created: '2026-09-20T09:12:00.000Z',
+      updated: '2026-09-20T09:12:00.000Z',
+      body: `项目记忆 ${index + 1} 的完整内容。`,
+    }));
+    const knowledgePage = {
+      pluginId: 'comet.project-knowledge',
+      label: '项目知识',
+      route: '/plugins/project-knowledge',
+      status: 'enabled',
+      globallyDisabled: false,
+      projectPaused: false,
+      diagnostics: [],
+      data: {
+        provider: 'local',
+        configured: true,
+        records: [],
+        manifestPreview: [],
+        counts: { trial: 0, proven: 0, enforced: 0, superseded: 0 },
+        diagnostics: [],
+        projectMemory: {
+          directory: '/tmp/comet-project-memory',
+          total: entries.length,
+          entries,
+          applicationCount: 0,
+        },
+      },
+    };
+
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.route('**/api/dashboard/**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/api/dashboard/projects') {
+        await route.fulfill({
+          json: {
+            currentProjectId: 'fixture-project',
+            projects: [
+              {
+                id: 'fixture-project',
+                name: 'Fixture',
+                path: '/fixture',
+                lastSeenAt: null,
+                availability: 'available',
+                isCurrent: true,
+              },
+            ],
+          },
+        });
+        return;
+      }
+      if (url.pathname.endsWith('/overview')) {
+        await route.fulfill({
+          json: {
+            project: {
+              name: 'Fixture',
+              path: '/fixture',
+              generatedAt: '2026-09-24T00:00:00.000Z',
+            },
+            summary: {
+              activeChanges: 0,
+              archivedChanges: 0,
+              verifyFailed: 0,
+              tasksIncomplete: 0,
+              dirtyFiles: 0,
+            },
+            initialChanges: { status: 'active', items: [], total: 0, nextCursor: null },
+            git: { branch: 'main', dirty: false, dirtyFiles: 0, ahead: 0, behind: 0 },
+            native: null,
+          },
+        });
+        return;
+      }
+      if (url.pathname.endsWith('/plugins')) {
+        await route.fulfill({
+          json: {
+            pages: [
+              {
+                pluginId: knowledgePage.pluginId,
+                label: knowledgePage.label,
+                route: knowledgePage.route,
+                status: knowledgePage.status,
+                globallyDisabled: knowledgePage.globallyDisabled,
+                projectPaused: knowledgePage.projectPaused,
+                diagnostics: knowledgePage.diagnostics,
+              },
+            ],
+          },
+        });
+        return;
+      }
+      if (url.pathname.endsWith('/plugins/comet.project-knowledge')) {
+        await route.fulfill({ json: knowledgePage });
+        return;
+      }
+      if (url.pathname.endsWith('/plugins/comet.project-knowledge/invoke')) {
+        const body = route.request().postDataJSON() as {
+          capability?: string;
+          input?: { slug?: string };
+        };
+        reads += 1;
+        if (holdReads) await readGate;
+        const memory = entries.find((entry) => entry.slug === body.input?.slug) ?? entries[0];
+        await route.fulfill({ json: { result: { kind: 'memory', ...memory } } });
+        return;
+      }
+      await route.fulfill({ json: {} });
+    });
+
+    await page.clock.install();
+    await page.goto('/');
+    await page.getByRole('menuitem', { name: '项目知识' }).click();
+    await page.getByRole('tab', { name: '项目记忆' }).click();
+
+    const inspector = page.getByRole('complementary', { name: '项目记忆详情' });
+    if (scenario === 'loading spacing') {
+      try {
+        const skeleton = inspector.locator('.ant-skeleton');
+        await expect(skeleton).toBeVisible();
+        for (const width of [1600, 1280, 1181]) {
+          await page.setViewportSize({ width, height: 900 });
+          const [pane, placeholder] = await Promise.all([
+            inspector.boundingBox(),
+            skeleton.boundingBox(),
+          ]);
+          expect(placeholder!.x - pane!.x).toBeGreaterThanOrEqual(16);
+          expect(
+            pane!.x + pane!.width - placeholder!.x - placeholder!.width,
+          ).toBeGreaterThanOrEqual(16);
+        }
+        await page.setViewportSize({ width: 900, height: 900 });
+        await expect(
+          page.locator('.dashboard-project-memory > .dashboard-memory-inspector'),
+        ).toBeHidden();
+        await page.setViewportSize({ width: 1600, height: 900 });
+        await page.screenshot({ path: test.info().outputPath('project-memory-loading.png') });
+      } finally {
+        releaseRead();
+      }
+    } else {
+      await expect(inspector.locator('.dashboard-project-memory-body')).toHaveText(entries[0].body);
+      await page.clock.runFor(31_000);
+      await page.waitForTimeout(700);
+      expect(reads).toBe(1);
+      entries.push({ ...entries[1], slug: 'unrelated-memory', title: '其他项目记忆' });
+      knowledgePage.data.projectMemory.total = entries.length;
+      await page.clock.runFor(31_000);
+      await expect(page.getByRole('region', { name: '项目记忆列表' })).toContainText('3 条');
+      expect(reads).toBe(1);
+
+      holdReads = true;
+      const previousBody = entries[0].body;
+      entries[0].updated = '2026-09-20T10:12:00.000Z';
+      entries[0].body = '更新后的项目记忆正文';
+      await page.clock.runFor(31_000);
+      await expect.poll(() => reads).toBe(2);
+      await expect(inspector.locator('.dashboard-project-memory-body')).toHaveText(previousBody);
+      await expect(inspector.locator('.ant-skeleton')).toHaveCount(0);
+      releaseRead();
+      await expect(inspector.locator('.dashboard-project-memory-body')).toHaveText(entries[0].body);
+      await page
+        .getByRole('region', { name: '项目记忆列表' })
+        .getByText('项目记忆 2', { exact: true })
+        .click();
+      await expect(inspector.locator('.dashboard-project-memory-body')).toHaveText(entries[1].body);
+      expect(reads).toBe(3);
+    }
+  });
+}

@@ -28,6 +28,7 @@ from scaffold.python.generated_task_cache import (
 )
 from scaffold.python.manifests import load_eval_manifest
 from scaffold.python.utils import AgentContainerCleanupError, run_agent_in_docker
+from scaffold.python.progress import publish_eval_progress
 
 
 GENERATOR_VERSION = "comet-auto-task-generator.v1"
@@ -664,6 +665,7 @@ def ensure_generated_manifest(
             attempts.append(telemetry)
             started = time.monotonic()
             try:
+                publish_eval_progress("generating")
                 generated = generator(_generation_prompt(snapshot, profile=profile, repair=error))
                 if isinstance(generated, GenerationOutput):
                     raw_output = generated.output

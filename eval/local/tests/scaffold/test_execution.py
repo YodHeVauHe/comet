@@ -15,6 +15,21 @@ from scaffold.python.execution import (
 )
 
 
+def test_managed_dashboard_can_explicitly_disable_inherited_judge():
+    main = resolve_execution(cli_agent="codex", cli_model="subject")
+    judge = resolve_judge(
+        main=main,
+        manifest={"model": "manifest-judge"},
+        source_env={
+            "BENCH_LLM_JUDGE": "1",
+            "BENCH_JUDGE_MODEL": "env-judge",
+            "COMET_EVAL_MANAGED": "1",
+            "COMET_EVAL_MANAGED_JUDGE": "0",
+        },
+    )
+    assert judge is None
+
+
 def test_redaction_preserves_portable_checkpoint_claim_hashes_and_yaml_structure():
     token = "portable-" + "a" * 64
     source = f"claim:\n  token: {token}\n  executorId: fixture\n"

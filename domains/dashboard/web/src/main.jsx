@@ -64,6 +64,8 @@ import {
   runMermaid,
 } from './markdown-preview.js';
 import { NativeWorkflowPanel } from './native-workflow-panel.jsx';
+import { EvalPanel } from './eval-panel.jsx';
+import { EvalSettings } from './eval-settings.jsx';
 import { WorkflowPhaseTrack } from './phase-progress-indicator.jsx';
 import {
   classicChangeStatusPresentation,
@@ -471,6 +473,10 @@ function DashboardApp({
   const [workflow, setWorkflow] = useState(() => (useDemo ? 'classic' : null));
   const [workflowSource, setWorkflowSource] = useState(null);
   const [pluginSelection, setPluginSelection] = useState(null);
+  const [evalOpen, setEvalOpen] = useState(
+    () => !embedded && new URLSearchParams(window.location.search).get('view') === 'eval',
+  );
+  const [evalRefreshToken, setEvalRefreshToken] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('comet.personal-memory');
   const [settingsPage, setSettingsPage] = useState(null);
@@ -704,7 +710,11 @@ function DashboardApp({
         const available = (directory.projects ?? []).filter(
           (project) => project.availability === 'available',
         );
+        const evalLink = new URLSearchParams(window.location.search);
+        const requestedEvalProject =
+          evalLink.get('view') === 'eval' ? evalLink.get('project') : null;
         const next =
+          available.find((project) => project.id === requestedEvalProject)?.id ??
           available.find((project) => project.id === directory.currentProjectId)?.id ??
           available[0]?.id ??
           null;
@@ -918,7 +928,8 @@ function DashboardApp({
   }, [demoPluginPages, pluginSelection, useDemo]);
 
   useEffect(() => {
-    if (!useDemo || !settingsOpen || !settingsSection) return undefined;
+    if (!useDemo || !settingsOpen || !settingsSection || settingsSection === 'comet.eval')
+      return undefined;
     let cancelled = false;
     setSettingsLoading(true);
     setSettingsError(null);
@@ -954,7 +965,14 @@ function DashboardApp({
   }, [pluginRefreshToken, settingsOpen, settingsSection, useDemo]);
 
   useEffect(() => {
-    if (useDemo || !activeProjectId || !settingsOpen || !settingsSection) return undefined;
+    if (
+      useDemo ||
+      !activeProjectId ||
+      !settingsOpen ||
+      !settingsSection ||
+      settingsSection === 'comet.eval'
+    )
+      return undefined;
     let cancelled = false;
     const owner = `settings:${activeProjectId}:${settingsSection}`;
     const cached =
@@ -1430,7 +1448,22 @@ function DashboardApp({
         open={railOpen}
         collapsed={sidebarCollapsed}
         workflow={workflow}
+        evalSelected={evalOpen}
+        onEvalSelect={() => {
+          setEvalOpen(true);
+          setSettingsOpen(false);
+          setPluginSelection(null);
+          const url = new URL(window.location.href);
+          url.searchParams.set('view', 'eval');
+          window.history.replaceState({}, '', url);
+        }}
         onWorkflow={(nextWorkflow) => {
+          setEvalOpen(false);
+          const url = new URL(window.location.href);
+          url.searchParams.delete('view');
+          url.searchParams.delete('run');
+          url.searchParams.delete('project');
+          window.history.replaceState({}, '', url);
           setSettingsOpen(false);
           if (nextWorkflow !== workflow) setTab('active');
           setWorkflow(nextWorkflow);
@@ -1440,12 +1473,13 @@ function DashboardApp({
         pluginSelection={pluginSelection}
         settingsOpen={settingsOpen}
         onSettings={() => {
-          const preferredSection =
-            pluginSelection ??
-            pluginPages.find((page) => page.pluginId === 'comet.personal-memory' && !page.pending)
-              ?.pluginId ??
-            pluginPages.find((page) => !page.pending)?.pluginId ??
-            'comet.config';
+          const preferredSection = evalOpen
+            ? 'comet.eval'
+            : (pluginSelection ??
+              pluginPages.find((page) => page.pluginId === 'comet.personal-memory' && !page.pending)
+                ?.pluginId ??
+              pluginPages.find((page) => !page.pending)?.pluginId ??
+              'comet.config');
           const cachedPage = useDemo
             ? (pluginPages.find((page) => page.pluginId === preferredSection) ?? null)
             : activeProjectId && preferredSection && preferredSection !== 'comet.config'
@@ -1464,6 +1498,12 @@ function DashboardApp({
           setSettingsError(null);
         }}
         onPluginSelect={(pluginId) => {
+          setEvalOpen(false);
+          const url = new URL(window.location.href);
+          url.searchParams.delete('view');
+          url.searchParams.delete('run');
+          url.searchParams.delete('project');
+          window.history.replaceState({}, '', url);
           setSettingsOpen(false);
           setPluginSelection(pluginId);
           setPluginPage(
@@ -1508,6 +1548,12 @@ function DashboardApp({
             toast('已从索引移除缺失项目');
           }}
           onProjectSelect={(nextProjectId) => {
+            if (evalOpen) {
+              const url = new URL(window.location.href);
+              url.searchParams.set('project', nextProjectId);
+              url.searchParams.delete('run');
+              window.history.replaceState({}, '', url);
+            }
             snapshotRequestRef.current?.abort();
             pageRequestRef.current?.abort();
             nativePageRequestRef.current?.abort();
@@ -1542,8 +1588,13 @@ function DashboardApp({
           loading={loading}
           query={query}
           onQuery={setQuery}
+          searchPlaceholder={evalOpen ? '搜索评估目标或运行记录…' : undefined}
           onMenu={() => setRailOpen(true)}
           onRefresh={async () => {
+            if (evalOpen) {
+              setEvalRefreshToken((value) => value + 1);
+              return;
+            }
             await refresh(true);
             await reloadPluginPages();
             if (activePluginPageId || settingsOpen) setPluginRefreshToken((value) => value + 1);
@@ -1566,7 +1617,22 @@ function DashboardApp({
                 : ''
             }`}
           >
-            {!useDemo && projectsReady && !activeProjectId ? (
+            {evalOpen && activeProjectId ? (
+              <EvalPanel
+                key={activeProjectId}
+                projectId={activeProjectId}
+                projectPath={projects.find((project) => project.id === activeProjectId)?.path}
+                query={query}
+                readOnly={embedded || useDemo}
+                refreshToken={evalRefreshToken}
+                onSettings={() => {
+                  setSettingsSection('comet.eval');
+                  setSettingsError(null);
+                  setSettingsLoading(false);
+                  setSettingsOpen(true);
+                }}
+              />
+            ) : !useDemo && projectsReady && !activeProjectId ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可用项目" />
             ) : !snapshot ? (
               <LoadingState />
@@ -1638,6 +1704,8 @@ function DashboardApp({
         <DashboardSettingsOverlay
           open={settingsOpen}
           readOnly={embedded}
+          evalReadOnly={embedded || useDemo}
+          onEvalSaved={() => setEvalRefreshToken((value) => value + 1)}
           section={settingsSection}
           pages={pluginPages}
           page={settingsPage}
@@ -1646,6 +1714,7 @@ function DashboardApp({
           error={settingsError}
           onClose={() => setSettingsOpen(false)}
           onSection={(pluginId) => {
+            if (pluginId === 'comet.eval') setSettingsLoading(false);
             setSettingsSection(pluginId);
             setSettingsPage(
               useDemo && pluginId !== 'comet.config'
@@ -1762,6 +1831,7 @@ function Topbar({
   loading,
   query,
   onQuery,
+  searchPlaceholder = '搜索变更、产物或文件…',
   projects,
   activeProjectId,
   onProjectSelect,
@@ -1878,7 +1948,7 @@ function Topbar({
           value={query}
           onChange={(event) => onQuery(event.target.value)}
           prefix={<SearchOutlined className="text-meta" />}
-          placeholder="搜索变更、产物或文件…"
+          placeholder={searchPlaceholder}
           allowClear
         />
       </div>
@@ -4090,6 +4160,8 @@ function AntSidebar({
   open,
   collapsed,
   workflow,
+  evalSelected = false,
+  onEvalSelect,
   workflowSource,
   onWorkflow,
   pluginPages,
@@ -4120,7 +4192,7 @@ function AntSidebar({
           mode="inline"
           inlineCollapsed={collapsed}
           inlineIndent={12}
-          selectedKeys={pluginSelection || !workflow ? [] : [workflow]}
+          selectedKeys={evalSelected || pluginSelection || !workflow ? [] : [workflow]}
           items={[
             { key: 'classic', icon: <BranchesOutlined />, label: 'Classic 工作流' },
             { key: 'native', icon: <FileTextOutlined />, label: 'Native 工作流' },
@@ -4132,6 +4204,23 @@ function AntSidebar({
           }}
         />
       </div>
+      {!embedded && (
+        <div className="dashboard-sidebar-group">
+          <div className="dashboard-sidebar-label">评估</div>
+          <Menu
+            className="dashboard-sidebar-menu"
+            mode="inline"
+            inlineCollapsed={collapsed}
+            inlineIndent={12}
+            selectedKeys={evalSelected ? ['eval'] : []}
+            items={[{ key: 'eval', icon: <FlagOutlined />, label: '评估 Eval' }]}
+            onClick={() => {
+              onEvalSelect?.();
+              onClose();
+            }}
+          />
+        </div>
+      )}
       <div className="dashboard-sidebar-group">
         <div className="dashboard-sidebar-label">插件中心</div>
         <Menu
@@ -4326,6 +4415,8 @@ function PluginCenterPage({ page, loading, error, readOnly = false, onRetry, onI
 function DashboardSettingsOverlay({
   open,
   readOnly = false,
+  evalReadOnly = false,
+  onEvalSaved,
   section,
   pages,
   page,
@@ -4345,14 +4436,14 @@ function DashboardSettingsOverlay({
       width={920}
       open={open}
       title="Comet 设置"
-      subtitle={readOnly ? '只读预览' : '当前项目'}
-      description="统一管理个人记忆、项目知识与工作流配置"
+      subtitle={readOnly ? '只读预览' : section === 'comet.eval' ? '本机用户' : '当前项目'}
+      description="管理记忆、知识、工作流与 Eval 配置"
       onClose={onClose}
       footer={
         <div className="dashboard-settings-modal-footer">
           <span>点击背景可关闭或还原设置</span>
           <div>
-            <Button type="primary" onClick={onClose}>
+            <Button type="primary" onClick={onClose} aria-label="完成">
               完成
             </Button>
           </div>
@@ -4360,6 +4451,9 @@ function DashboardSettingsOverlay({
       }
     >
       <DashboardSettingsPage
+        active={open}
+        evalReadOnly={evalReadOnly}
+        onEvalSaved={onEvalSaved}
         section={section}
         pages={pages}
         page={page}
@@ -4377,6 +4471,9 @@ function DashboardSettingsOverlay({
 }
 
 function DashboardSettingsPage({
+  active,
+  evalReadOnly,
+  onEvalSaved,
   section,
   pages,
   page,
@@ -4406,6 +4503,7 @@ function DashboardSettingsPage({
       disabled: !installedPlugins.has('comet.project-knowledge'),
     },
     { key: 'comet.config', icon: <SettingOutlined />, label: 'Comet 配置' },
+    { key: 'comet.eval', icon: <CheckCircleOutlined />, label: 'Eval' },
   ];
   const currentData = section === 'comet.config' ? config : page;
   return (
@@ -4426,46 +4524,54 @@ function DashboardSettingsPage({
           aria-disabled={readOnly || undefined}
         >
           <div className="dashboard-settings-content">
-            {error && currentData ? (
-              <Alert
-                className="mb-3"
-                type="warning"
-                showIcon
-                message="最新数据同步失败，当前显示缓存"
-                description={error}
-                action={<Button onClick={onRetry}>重试</Button>}
-              />
-            ) : null}
-            {loading && !currentData ? (
-              <LoadingState />
-            ) : error && !currentData ? (
-              <Alert
-                type="error"
-                showIcon
-                message="设置加载失败"
-                description={error}
-                action={<Button onClick={onRetry}>重试</Button>}
-              />
-            ) : section === 'comet.config' && config ? (
-              <CometConfigSettings data={config} readOnly={readOnly} onSave={onSaveConfig} />
-            ) : !page ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前设置不可用" />
-            ) : page.pluginId === 'comet.personal-memory' ? (
-              <PersonalMemorySettings
-                page={page}
-                data={page.data}
-                readOnly={readOnly}
-                onInvoke={onInvoke}
-              />
-            ) : page.pluginId === 'comet.project-knowledge' ? (
-              <ProjectKnowledgeSettings
-                page={page}
-                data={page.data}
-                readOnly={readOnly}
-                onInvoke={onInvoke}
-              />
+            {section === 'comet.eval' ? (
+              active ? (
+                <EvalSettings readOnly={evalReadOnly} onSaved={onEvalSaved} />
+              ) : null
             ) : (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该插件暂未提供设置页" />
+              <>
+                {error && currentData ? (
+                  <Alert
+                    className="mb-3"
+                    type="warning"
+                    showIcon
+                    message="最新数据同步失败，当前显示缓存"
+                    description={error}
+                    action={<Button onClick={onRetry}>重试</Button>}
+                  />
+                ) : null}
+                {loading && !currentData ? (
+                  <LoadingState />
+                ) : error && !currentData ? (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message="设置加载失败"
+                    description={error}
+                    action={<Button onClick={onRetry}>重试</Button>}
+                  />
+                ) : section === 'comet.config' && config ? (
+                  <CometConfigSettings data={config} readOnly={readOnly} onSave={onSaveConfig} />
+                ) : !page ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前设置不可用" />
+                ) : page.pluginId === 'comet.personal-memory' ? (
+                  <PersonalMemorySettings
+                    page={page}
+                    data={page.data}
+                    readOnly={readOnly}
+                    onInvoke={onInvoke}
+                  />
+                ) : page.pluginId === 'comet.project-knowledge' ? (
+                  <ProjectKnowledgeSettings
+                    page={page}
+                    data={page.data}
+                    readOnly={readOnly}
+                    onInvoke={onInvoke}
+                  />
+                ) : (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该插件暂未提供设置页" />
+                )}
+              </>
             )}
           </div>
         </section>
@@ -6668,6 +6774,10 @@ function ProjectMemoryPanel({ summary, readOnly = false, onInvoke }) {
   const [detail, setDetail] = useState(null);
   const [detailPending, setDetailPending] = useState(false);
   const [detailError, setDetailError] = useState(null);
+  const invokeRef = useRef(onInvoke);
+  useEffect(() => {
+    invokeRef.current = onInvoke;
+  }, [onInvoke]);
   const entries = useMemo(
     () => (Array.isArray(summary?.entries) ? summary.entries : []),
     [summary?.entries],
@@ -6686,23 +6796,27 @@ function ProjectMemoryPanel({ summary, readOnly = false, onInvoke }) {
   const selectedEntry =
     visibleEntries.find((entry) => entry.slug === selectedSlug) ?? visibleEntries[0] ?? null;
   const selectedKey = selectedEntry?.slug ?? null;
+  const directory = summary?.directory ?? '';
+  const currentDetail =
+    detail?.directory === directory && detail?.value?.slug === selectedKey ? detail.value : null;
   useEffect(() => {
     if (selectedKey !== selectedSlug) setSelectedSlug(selectedKey);
   }, [selectedKey, selectedSlug]);
   useEffect(() => {
     let cancelled = false;
-    setDetail(null);
     setDetailError(null);
-    if (!selectedEntry) {
+    if (!selectedKey) {
+      setDetail(null);
       setDetailPending(false);
       return undefined;
     }
     setDetailPending(true);
-    onInvoke('memory-get', { slug: selectedEntry.slug })
+    invokeRef
+      .current('memory-get', { slug: selectedKey })
       .then((result) => {
         if (cancelled) return;
         if (result?.kind !== 'memory') setDetailError('项目记忆内容读取失败');
-        else setDetail(result);
+        else setDetail({ directory, value: result });
       })
       .catch((error) => {
         if (!cancelled)
@@ -6714,8 +6828,7 @@ function ProjectMemoryPanel({ summary, readOnly = false, onInvoke }) {
     return () => {
       cancelled = true;
     };
-  }, [onInvoke, selectedEntry?.slug, summary?.total]);
-  const directory = summary?.directory ?? '';
+  }, [directory, selectedKey, selectedEntry?.updated]);
   const emptyDescription = searchText.trim()
     ? '没有匹配的项目记忆'
     : '还没有项目记忆。任务结束时 Agent 会把验证过、可复用的经验通过 comet knowledge remember 写入这里。';
@@ -6834,16 +6947,31 @@ function ProjectMemoryPanel({ summary, readOnly = false, onInvoke }) {
               <strong>{selectedEntry.title}</strong>
               <p>{selectedEntry.description}</p>
             </div>
-            {detailPending ? (
-              <Skeleton active paragraph={{ rows: 6 }} />
-            ) : detailError ? (
-              <Alert type="warning" showIcon message="记忆内容暂不可用" description={detailError} />
-            ) : (
-              <section>
-                <h4>记忆内容</h4>
-                <pre className="dashboard-project-memory-body">{detail?.body ?? ''}</pre>
-              </section>
-            )}
+            <section>
+              {detailPending && !currentDetail ? (
+                <Skeleton active paragraph={{ rows: 6 }} />
+              ) : detailError && !currentDetail ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="记忆内容暂不可用"
+                  description={detailError}
+                />
+              ) : (
+                <>
+                  <h4>记忆内容</h4>
+                  {detailError && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="记忆内容更新失败"
+                      description={detailError}
+                    />
+                  )}
+                  <pre className="dashboard-project-memory-body">{currentDetail?.body ?? ''}</pre>
+                </>
+              )}
+            </section>
             <section>
               <h4>记忆信息</h4>
               <div className="dashboard-memory-inspector-list">

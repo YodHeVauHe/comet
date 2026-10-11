@@ -289,6 +289,10 @@
         "to": "workflow-application"
       },
       {
+        "from": "dashboard",
+        "to": "eval"
+      },
+      {
         "from": "engine",
         "to": "skill"
       },

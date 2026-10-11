@@ -31,6 +31,7 @@ interface ApplicationEvalOptions {
   settings: ApplicationEvalSettings;
   reuseTaskSet?: ApplicationEvalTaskSet;
   previousExperimentId?: string;
+  executeCommand?: typeof runExternalCommandAsync;
 }
 export interface ApplicationEvalTaskSet {
   manifestPath: string;
@@ -101,6 +102,7 @@ export interface ApplicationEvalResult {
   limitations: string[];
   failures: string[];
   taskSet?: ApplicationEvalTaskSet;
+  caseSelection?: { sourceRunId: string };
 }
 
 async function reusableTasks(projectRoot: string, taskSet: ApplicationEvalTaskSet) {
@@ -731,10 +733,13 @@ async function generationFailure(projectRoot: string, prepared: PreparedApplicat
 export async function runWorkflowApplicationEval(
   options: ApplicationEvalOptions & { confirmationHash: string; experimentId: string },
 ): Promise<ApplicationEvalResult> {
+  const selectedRetry =
+    process.env.COMET_EVAL_MANAGED === '1' && !!process.env.COMET_EVAL_CASE_SELECTION;
   const prepared = await prepareWorkflowApplicationEval(options);
   const existing = await readWorkflowApplicationEvalResult(prepared);
   if (existing) {
-    await recordApplicationEvaluationEvidence(options.projectRoot, prepared.resultFile);
+    if (!existing.caseSelection && !selectedRetry)
+      await recordApplicationEvaluationEvidence(options.projectRoot, prepared.resultFile);
     return existing;
   }
   const runRoot = path.dirname(prepared.resultFile);
@@ -750,7 +755,7 @@ export async function runWorkflowApplicationEval(
     await (
       prepared.preview.blockedReasons.length
         ? Promise.reject(new Error(prepared.preview.blockedReasons.join('\n')))
-        : runExternalCommandAsync(
+        : (options.executeCommand ?? runExternalCommandAsync)(
             process.execPath,
             [
               path.join(packageRoot, 'bin/comet.js'),
@@ -835,7 +840,8 @@ export async function runWorkflowApplicationEval(
     });
     const result = await readWorkflowApplicationEvalResult(prepared);
     if (!result) throw new Error('Eval 未生成与当前应用绑定的结果');
-    await recordApplicationEvaluationEvidence(options.projectRoot, prepared.resultFile);
+    if (!result.caseSelection && !selectedRetry)
+      await recordApplicationEvaluationEvidence(options.projectRoot, prepared.resultFile);
     return result;
   } finally {
     await lock.close();

@@ -3,6 +3,37 @@ import {
   resolveRepositoryPath,
 } from '../../platform/paths/repository-layout.js';
 
+export {
+  previewEvalRun,
+  normalizeEvalRunConfig,
+  evalEnvironmentChecks,
+  EVAL_AGENT_IDS,
+} from './eval-run-preview.js';
+export {
+  startEvalRun,
+  requestStopEvalRun,
+  reconcileEvalRun,
+  collectEvalRuns,
+} from './eval-run-manager.js';
+export {
+  readEvalRun,
+  listEvalRuns,
+  setEvalBaseline,
+  clearEvalBaseline,
+  compareEvalRuns,
+  readEvalArtifact,
+  EvalRunError,
+} from './eval-run-store.js';
+export type { EvalRunPreview } from './eval-run-preview.js';
+export type { EvalRunConfig, EvalRunDetail, EvalRunComparison } from './eval-run-types.js';
+export { resolveEvalExecution } from './eval-execution-config.js';
+export {
+  beginCliEvalTracking,
+  finishCliEvalTracking,
+  registerCliEvalRun,
+  updateManagedEvalRun,
+} from './eval-run-manager.js';
+
 export interface RepositoryEvalWorkspace {
   root: string;
   localRoot: string;
@@ -25,6 +56,7 @@ export {
   type StaticCollectOptions,
 } from './standalone-static-collect.js';
 export { loadUserEvalEnvironment } from './user-environment.js';
+export { readUserEvalSettings, saveUserEvalSettings } from './eval-user-settings.js';
 export {
   previewWorkflowApplicationEval,
   prepareWorkflowApplicationEval,
@@ -70,3 +102,6 @@ export function resolveRepositoryEvalWorkspace(): RepositoryEvalWorkspace {
     langsmithRoot: resolveRepositoryPath('eval/langsmith'),
   };
 }
+
+export { listEvalPresets, saveEvalPreset, deleteEvalPreset } from './eval-run-presets.js';
+export { readEvalRetrySelection } from './eval-run-retry.js';

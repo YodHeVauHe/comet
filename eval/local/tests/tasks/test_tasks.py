@@ -24,6 +24,11 @@ from conftest import get_fixtures
 from scaffold import Treatment
 from scaffold.python import extract_events, parse_output
 from scaffold.python.aligned_comparison import build_case_manifest, case_manifest_payload
+from scaffold.python.case_selection import (
+    read_case_selection,
+    select_case_params,
+    assert_selected_case_identity,
+)
 from scaffold.python.native_eval import (
     adapt_checks_for_native,
     adapt_prompt_for_native,
@@ -154,7 +159,9 @@ def generate_test_params(task_filter: str | None, treatment_filter: str | None, 
     authored_tasks = {}
     manifest_baseline_treatments = []
     frozen_selected = False
-    if config is not None and (config.getoption("--eval-manifest") or config.getoption("--skill-path")):
+    if config is not None and (
+        config.getoption("--eval-manifest") or config.getoption("--skill-path")
+    ):
         resolved = _resolve_frozen_task_set(config, task_filter)
         frozen_selected = True
         manifest = config._comet_resolution_manifest
@@ -413,16 +420,17 @@ def pytest_generate_tests(metafunc):
         # The explicit marker is the controller-owned repetition identity used
         # to persist a complete matrix before any model run begins.
         params = []
-        for rep in range(count):
-            for task_name, treatment_name in base_params:
-                params.append(
-                    pytest.param(
-                        task_name,
-                        treatment_name,
-                        id=f"{task_name}-{treatment_name}-r{rep + 1}",
-                        marks=pytest.mark.eval_case(repetition=rep + 1),
-                    )
+        for task_name, treatment_name, rep in select_case_params(
+            base_params, count, read_case_selection()
+        ):
+            params.append(
+                pytest.param(
+                    task_name,
+                    treatment_name,
+                    id=f"{task_name}-{treatment_name}-r{rep}",
+                    marks=pytest.mark.eval_case(repetition=rep),
                 )
+            )
         metafunc.parametrize("task_name,treatment_name", params)
 
 
@@ -435,6 +443,14 @@ def pytest_generate_tests(metafunc):
 def test_task_treatment(task_name, treatment_name):
     """Run a task with a treatment and validate results."""
     fixtures = get_fixtures()
+    from scaffold.python.progress import publish_eval_progress
+
+    publish_eval_progress(
+        "preparing",
+        task=task_name,
+        treatment=treatment_name,
+        repetition=getattr(fixtures, "repetition", 1),
+    )
     task = _load_eval_task(task_name, fixtures.request_config)
     treatments = load_treatments()
     dynamic = conftest._get_dynamic_treatment_config(fixtures.request_config)
@@ -526,13 +542,20 @@ def test_task_treatment(task_name, treatment_name):
             environment_dir=task.environment_dir if task.manifest_path else None,
         )
     )
+    assert_selected_case_identity(task.name, treatment_name, case_manifest)
     skill_package_path = conftest._snapshot_dynamic_skill_package(
         fixtures.test_dir, skill_hints
     ) or skill_hints.get("path")
-    from scaffold.python.application_eval import application_eval_context, application_execution_prompt, install_application_for_case
+    from scaffold.python.application_eval import (
+        application_eval_context,
+        application_execution_prompt,
+        install_application_for_case,
+    )
 
     if application_eval_context() is not None:
-        installed_file = install_application_for_case(fixtures.test_dir, skill_package_path, selected_agent)
+        installed_file = install_application_for_case(
+            fixtures.test_dir, skill_package_path, selected_agent
+        )
         prompt = application_execution_prompt(prompt, skill_package_path, installed_file)
 
     result = fixtures.run_claude(

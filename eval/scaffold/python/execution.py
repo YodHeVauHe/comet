@@ -305,6 +305,11 @@ def resolve_judge(
     """
 
     environment = source_env if source_env is not None else os.environ
+    if (
+        environment.get("COMET_EVAL_MANAGED") == "1"
+        and environment.get("COMET_EVAL_MANAGED_JUDGE") == "0"
+    ):
+        return None
     enabled = (
         manifest is not None
         or any(value is not None for value in (cli_agent, cli_model, cli_base_url))

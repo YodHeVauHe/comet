@@ -363,9 +363,7 @@ def _require_agent_credentials(agent: str, source_env: dict[str, str] | None = N
         return
     adapter = get_agent_adapter(agent)
     separator = ", " if adapter.custom else " or "
-    raise pytest.UsageError(
-        f"Credentials for {agent} not set: {separator.join(missing)}"
-    )
+    raise pytest.UsageError(f"Credentials for {agent} not set: {separator.join(missing)}")
 
 
 def _normal_run_preflight(config) -> None:
@@ -379,7 +377,11 @@ def _normal_run_preflight(config) -> None:
     main = _resolve_eval_execution(config)
     judge = _resolve_eval_judge(config)
     suite = next(
-        (name for name in ("local", "langsmith", "langfuse") if f"{name}/tests/" in " ".join(config.args)),
+        (
+            name
+            for name in ("local", "langsmith", "langfuse")
+            if f"{name}/tests/" in " ".join(config.args)
+        ),
         "local",
     )
     required_harness = (
@@ -389,7 +391,9 @@ def _normal_run_preflight(config) -> None:
     )
     missing_harness = [str(path) for path in required_harness if not path.is_file()]
     if missing_harness:
-        raise pytest.UsageError(f"Packaged eval harness is incomplete: {', '.join(missing_harness)}")
+        raise pytest.UsageError(
+            f"Packaged eval harness is incomplete: {', '.join(missing_harness)}"
+        )
     manifest = _manifest_for_config(config)
     if manifest is not None and manifest.reporting is not None:
         selected_report_suite = manifest.reporting.suite
@@ -975,7 +979,9 @@ def pytest_configure(config):
     )
     try:
         context = context_from_environment()
-        if context is None and (config.getoption("--eval-manifest") or config.getoption("--skill-path")):
+        if context is None and (
+            config.getoption("--eval-manifest") or config.getoption("--skill-path")
+        ):
             context = resolve_eval_context(
                 skill_path=config.getoption("--skill-path"),
                 manifest_path=config.getoption("--eval-manifest"),
@@ -1066,7 +1072,8 @@ class ExperimentPlugin:
             if generated is not None:
                 self.logger.metadata["application_task_set"] = {
                     "manifestPath": str(generated.manifest_path),
-                    "manifestHash": "sha256:" + hashlib.sha256(generated.manifest_path.read_bytes()).hexdigest(),
+                    "manifestHash": "sha256:"
+                    + hashlib.sha256(generated.manifest_path.read_bytes()).hexdigest(),
                     "generationHash": generated.generation_hash,
                     "sourceRoot": application["skillRoot"],
                     "sourceSnapshotHash": application["snapshotHash"],
@@ -1075,7 +1082,10 @@ class ExperimentPlugin:
                 self.logger.metadata["application_task_set"] = application["preview"]["taskSet"]
             task_set = self.logger.metadata.get("application_task_set")
             if task_set:
-                if self.logger.base_dir.resolve() != Path(application["resultFile"]).resolve().parent:
+                if (
+                    self.logger.base_dir.resolve()
+                    != Path(application["resultFile"]).resolve().parent
+                ):
                     raise RuntimeError("TaskSet receipt is outside the selected experiment")
                 generation_metadata = Path(task_set["manifestPath"]).parent / "generation.json"
                 receipt = {
@@ -1087,10 +1097,12 @@ class ExperimentPlugin:
                     "matrixHash": payload["matrix_hash"],
                     "generationMetadataHash": (
                         "sha256:" + hashlib.sha256(generation_metadata.read_bytes()).hexdigest()
-                        if generation_metadata.is_file() else None
+                        if generation_metadata.is_file()
+                        else None
                     ),
                 }
                 from scaffold.python.logging import _atomic_write_json
+
                 receipt_path = self.logger.base_dir / "application-task-set.json"
                 with file_lock(self.logger.base_dir / ".application-task-set.lock"):
                     if receipt_path.is_symlink():
@@ -1755,7 +1767,11 @@ def setup_test_context(test_dir):
         from scaffold.python.application_eval import application_eval_context
 
         application = application_eval_context()
-        if application is not None and source_dir and source_dir.resolve() == Path(application["skillRoot"]).resolve():
+        if (
+            application is not None
+            and source_dir
+            and source_dir.resolve() == Path(application["skillRoot"]).resolve()
+        ):
             # The production installer will publish this entry and the fixed dependency Skills.
             return
         skill_dir = test_dir / _agent_project_root(agent) / "skills" / skill_name
@@ -1993,6 +2009,15 @@ def run_claude(test_dir, experiment_logger, request):
         if experiment_logger and hasattr(request, "node"):
             treatment_name = _get_treatment_name(request.node)
             rep = _plugin.get_rep_number(treatment_name) if _plugin else 1
+            if (
+                os.environ.get("COMET_EVAL_CASE_SELECTION")
+                and os.environ.get("COMET_EVAL_MANAGED") == "1"
+            ):
+                marker = request.node.get_closest_marker("eval_case")
+                if marker:
+                    rep = marker.kwargs["repetition"]
+                    if _plugin:
+                        _plugin.run_counter[treatment_name] = rep
             save_raw(
                 experiment_logger.base_dir,
                 treatment_name,
@@ -2027,6 +2052,13 @@ def record_result(test_dir, experiment_logger, request):
 
         treatment_name = _get_treatment_name(request.node)
         rep = _plugin.run_counter.get(treatment_name, 1) if _plugin else 1
+        if (
+            os.environ.get("COMET_EVAL_CASE_SELECTION")
+            and os.environ.get("COMET_EVAL_MANAGED") == "1"
+        ):
+            marker = request.node.get_closest_marker("eval_case")
+            if marker:
+                rep = marker.kwargs["repetition"]
         events["sample"] = rep
         base_dir = experiment_logger.base_dir
 
@@ -2223,6 +2255,11 @@ def fixtures(
         run_claude=run_claude,
         record_result=record_result,
         request_config=request.config,
+        repetition=(
+            request.node.get_closest_marker("eval_case").kwargs.get("repetition", 1)
+            if request.node.get_closest_marker("eval_case")
+            else 1
+        ),
     )
     yield _current_fixtures
     _current_fixtures = None

@@ -1,6 +1,7 @@
 """Python utilities - thin wrappers around shell scripts."""
 
 import json
+import hashlib
 import ntpath
 import os
 import random
@@ -17,6 +18,7 @@ from dotenv import load_dotenv
 from scaffold.python.agents import validate_agent_id
 from scaffold.python.execution import ResolvedExecution, build_agent_environment
 from scaffold.python.paths import EVAL_ROOT, get_suite_root
+from scaffold.python.progress import observe_eval_container
 
 TEST_CONTEXT_FILE = os.environ.get("BENCH_TEST_CONTEXT", "_test_context.json")
 TEST_RESULTS_FILE = os.environ.get("BENCH_TEST_RESULTS", "_test_results.json")
@@ -216,7 +218,23 @@ def run_shell(script, *args, timeout=None, check=True, env=None, capture_to_file
         # On Windows, a Docker child can inherit Bash's stdout pipe. Python's
         # subprocess.run waits for that pipe to close even after killing Bash,
         # delaying the timeout handler that removes the named container.
-        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        container_name = None
+        if script == "docker.sh" and args:
+            if args[0] == "run-agent" and "--container-name" in args:
+                position = args.index("--container-name") + 1
+                container_name = args[position] if position < len(args) else None
+            elif args[0] in {"run-claude-loop", "run-agent-loop"} and len(args) > 1:
+                prefix = (
+                    "comet-eval-loop-" if args[0] == "run-claude-loop" else "comet-eval-agent-loop-"
+                )
+                container_name = (
+                    prefix + hashlib.sha256(_to_bash_path(args[1]).encode()).hexdigest()[:24]
+                )
+        with (
+            observe_eval_container(container_name),
+            tempfile.TemporaryFile() as stdout_file,
+            tempfile.TemporaryFile() as stderr_file,
+        ):
             try:
                 result = subprocess.run(
                     cmd,

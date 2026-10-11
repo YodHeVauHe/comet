@@ -860,6 +860,9 @@ class ExperimentLogger:
 
     def finalize(self):
         """Generate and save final summary."""
+        from scaffold.python.progress import publish_eval_progress
+
+        publish_eval_progress("finalizing")
         summary = self.generate_summary()
         summary_path = self.base_dir / "summary.md"
         written = write_report_outputs(

@@ -69,6 +69,16 @@ vi.mock('../../domains/bundle/eval-run-result.js', () => ({
 vi.mock('../../domains/eval/user-environment.js', () => ({
   loadUserEvalEnvironment,
 }));
+vi.mock('../../domains/eval/eval-run-manager.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../domains/eval/eval-run-manager.js')>()),
+  beginCliEvalTracking: vi.fn(async () => {}),
+  finishCliEvalTracking: vi.fn(async () => {}),
+}));
+vi.mock('../../platform/process/run-owned-command.js', () => ({
+  runOwnedCommand: vi.fn(async (command, args, options) =>
+    execFileSync(command, args, { cwd: options.cwd, stdio: 'inherit', env: options.env }),
+  ),
+}));
 
 function expectUvRun(args: string[], cwd = evalCwd): string {
   expect(execFileSync).toHaveBeenCalledWith('uv', ['--version'], { stdio: 'pipe' });

@@ -28,6 +28,13 @@ import {
 } from './project-directory.js';
 import { DashboardPluginHostError, type DashboardPluginHostFactory } from './plugin-host.js';
 import type { DashboardChangeTab } from './types.js';
+import { handleDashboardEvalRequest } from './eval-routes.js';
+import {
+  readUserEvalSettings,
+  saveUserEvalSettings,
+  evalEnvironmentChecks,
+} from '../eval/index.js';
+import { EvalRunError } from '../eval/index.js';
 
 export interface DashboardServerOptions {
   projectPath: string;
@@ -121,6 +128,10 @@ export async function startDashboardServer(
 
   const server = http.createServer((req, res) => {
     handleRequest(req, res, currentProjectPath, webRoot, pluginHostAccess).catch((error) => {
+      if (error instanceof EvalRunError) {
+        respondJson(res, req.method ?? 'GET', error.statusCode, { error: error.message });
+        return;
+      }
       if (
         error instanceof DashboardChangeQueryError ||
         error instanceof NativeDashboardQueryError
@@ -206,18 +217,40 @@ async function handleRequest(
   const isPluginRequest = pathname.includes('/plugins');
   const isProjectConfigRequest = pathname.endsWith('/config');
   const isProjectForgetRequest = pathname.endsWith('/forget');
+  const isEvalSettingsRequest = /^\/api\/dashboard\/eval\/settings(?:\/check)?$/u.test(pathname);
+  const isEvalRequest =
+    isEvalSettingsRequest || /^\/api\/dashboard\/projects\/[^/]+\/eval(?:\/|$)/u.test(pathname);
   if (
     req.method !== 'GET' &&
     req.method !== 'HEAD' &&
     !(
       req.method === 'POST' &&
-      (isPluginRequest || isProjectConfigRequest || isProjectForgetRequest)
+      (isPluginRequest || isProjectConfigRequest || isProjectForgetRequest || isEvalRequest)
     )
   ) {
     respondError(res, 405, 'Method not allowed');
     return;
   }
 
+  if (isEvalSettingsRequest) {
+    if (pathname.endsWith('/check')) {
+      const { defaults } = await readUserEvalSettings();
+      const environment = await evalEnvironmentChecks({
+        target: '',
+        targetType: 'skill',
+        ...defaults,
+        ...(defaults.judgeEnabled ? {} : { judgeModel: undefined }),
+      });
+      respondJson(res, req.method, 200, { environment, noModelsStarted: true });
+      return;
+    }
+    const result =
+      req.method === 'POST'
+        ? await saveUserEvalSettings(await readJsonBody(req))
+        : await readUserEvalSettings();
+    respondJson(res, req.method, 200, result);
+    return;
+  }
   if (pathname === '/api/dashboard') {
     const snapshot = await collectDashboardSnapshot(projectPath);
     respondJson(res, req.method, 200, snapshot);
@@ -373,6 +406,18 @@ async function handleRequest(
 
     if (subpath === '/plugins' || subpath.startsWith('/plugins/')) {
       await handlePluginRequest(req, res, project, subpath, pluginHostAccess);
+      return;
+    }
+
+    if (subpath === '/eval' || subpath.startsWith('/eval/')) {
+      const result = await handleDashboardEvalRequest(
+        project.path,
+        req.method ?? 'GET',
+        subpath.slice(5),
+        url.searchParams,
+        req.method === 'POST' ? await readJsonBody(req) : undefined,
+      );
+      respondJson(res, req.method, result.status, result.body);
       return;
     }
 

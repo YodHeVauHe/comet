@@ -173,6 +173,8 @@ def write_application_result(logger) -> None:
     results = [result for runs in logger.results.values() for result in runs]
     names = sorted({result.events_summary.get("task", "") for result in results} - {""})
     preview = context["preview"]
+    from scaffold.python.case_selection import read_case_selection
+    selection = read_case_selection()
     covered = {step for result in results for step in result.events_summary.get("application_coverage", [])}
     executed = {step for result in results for step in result.events_summary.get("application_executed_steps", [])}
     covered_choices = {choice for result in results for choice in result.events_summary.get("application_choices", [])}
@@ -188,6 +190,8 @@ def write_application_result(logger) -> None:
     exitstatus = getattr(logger, "metadata", {}).get("pytest_exitstatus", 0)
     harness_complete = exitstatus in {0, 1} and not (exitstatus == 1 and all(result.passed for result in results))
     status = "passed" if complete and clean and verified and harness_complete and all(result.passed for result in results) else "failed" if complete and clean and verified and harness_complete else "incomplete"
+    if selection is not None:
+        status = "incomplete"
     models = set()
     for case in results:
         reported = case.events_summary.get("model_usage") or {}
@@ -207,6 +211,7 @@ def write_application_result(logger) -> None:
         "application": preview["application"],
         "settings": preview["settings"],
         "status": status,
+        **({"caseSelection": {"sourceRunId": selection["sourceRunId"]}} if selection else {}),
         "taskNames": names,
         "passed": sum(result.passed for result in results),
         "total": len(results),

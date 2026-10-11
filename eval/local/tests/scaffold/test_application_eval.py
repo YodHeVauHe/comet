@@ -245,6 +245,19 @@ def test_two_started_runs_without_execution_cannot_pass_the_application_eval(tmp
     assert any("actually executed" in failure for failure in report["failures"])
 
 
+def test_failed_retry_subset_cannot_pass_full_application_acceptance(tmp_path, monkeypatch):
+    _, result_root = _context(tmp_path, monkeypatch)
+    monkeypatch.setenv("COMET_EVAL_MANAGED", "1")
+    monkeypatch.setenv("COMET_EVAL_CONTEXT", "{}")
+    monkeypatch.setenv("COMET_EVAL_CASE_SELECTION", json.dumps({"sourceRunId": "original", "cases": [{"task": name, "treatment": "DYNAMIC_SKILL", "repetition": 1, "caseHash": "fixed", "validatorHash": "fixed"} for name in ["normal", "rejected"]]}))
+    results = [TreatmentResult("dynamic", True, ["SDK Run inspected by actual Runtime: one"], [], {"task": name, "application_executed_steps": ["publish/draft"]}) for name in ["normal", "rejected"]]
+    write_application_result(SimpleNamespace(base_dir=result_root, results={"dynamic": results}))
+    report = json.loads((result_root / "application-result.json").read_text())
+    assert report["status"] == "incomplete"
+    assert report["caseSelection"]["sourceRunId"] == "original"
+    assert report["passed"] == 2
+
+
 def test_report_does_not_invent_model_identity_or_treat_partial_costs_as_total(tmp_path, monkeypatch):
     _, result_root = _context(tmp_path, monkeypatch)
     results = [TreatmentResult("dynamic", True, ["SDK Run inspected by actual Runtime: one"], [], {"task": name, "application_executed_steps": ["publish/draft"], "execution_identity": {"model": None}, **({"model_usage": {"actual-provider-model": {}}, "total_cost_usd": 0.5} if name == "normal" else {})}) for name in ["normal", "rejected"]]

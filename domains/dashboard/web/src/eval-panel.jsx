@@ -1,0 +1,1801 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Alert,
+  App,
+  AutoComplete,
+  Button,
+  Card,
+  Checkbox,
+  Descriptions,
+  Drawer,
+  Empty,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Segmented,
+  Space,
+  Spin,
+  Steps,
+  Table,
+  Tabs,
+  Switch,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
+import {
+  ArrowLeftOutlined,
+  DownloadOutlined,
+  ExperimentOutlined,
+  EyeOutlined,
+  FileTextOutlined,
+  FlagOutlined,
+  InfoCircleOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  RightOutlined,
+} from '@ant-design/icons';
+import { renderMarkdown } from './markdown-preview.js';
+import './eval-panel.css';
+import {
+  EvalFirstUse,
+  EvalErrorGuide,
+  EvalGuideDrawer,
+  evalDisplayError,
+} from './eval-guidance.jsx';
+import { EvalPresetControls } from './eval-preset-controls.jsx';
+import {
+  EvalSection,
+  EvalRunProgress,
+  EvalOverview,
+  EvalCases,
+  EvalCaseEvidence,
+  EvalCoverage,
+  EvalConfiguration,
+  EvalComparison,
+  EvalArtifacts,
+  Metric,
+  numeric,
+  conclusionLabels,
+  evalPagination,
+} from './eval-results.jsx';
+
+const { Text, Title, Paragraph } = Typography;
+const terminal = (status) => ['completed', 'stopped', 'interrupted', 'unknown'].includes(status);
+const executionLabels = {
+  queued: '等待执行',
+  preparing: '准备环境',
+  generating: '生成用例',
+  running: '执行中',
+  judging: '判定中',
+  finalizing: '整理报告',
+  stopping: '停止中',
+  completed: '已结束',
+  stopped: '已停止',
+  interrupted: '异常中断',
+  unknown: '历史记录',
+};
+const sourceLabels = {
+  authored: '手写用例',
+  recommended: '推荐用例',
+  'generated-cache': '生成缓存',
+  'pending-generation': '待自动生成',
+  'fixed-reuse': '复用固定用例',
+  quick: '快速冒烟',
+  explicit: '指定用例',
+};
+async function requestJson(base, suffix, { signal, body } = {}) {
+  const response = await fetch(base + suffix, {
+    signal,
+    ...(body !== undefined
+      ? {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      : {}),
+  });
+  const data = await response.json();
+  if (!response.ok)
+    throw Object.assign(new Error(data.error || 'Eval 请求失败'), { status: response.status });
+  return data;
+}
+function locationFor(projectId, runId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('view', 'eval');
+  url.searchParams.set('project', projectId);
+  if (runId) url.searchParams.set('run', runId);
+  else url.searchParams.delete('run');
+  window.history.replaceState({}, '', url);
+}
+function saveArtifact(value, filename) {
+  const types = {
+    markdown: 'text/markdown;charset=utf-8',
+    html: 'text/html;charset=utf-8',
+    json: 'application/json;charset=utf-8',
+    text: 'text/plain;charset=utf-8',
+  };
+  const url = URL.createObjectURL(
+    new Blob([value.content], { type: types[value.format] || types.text }),
+  );
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function RunStatus({ run }) {
+  return (
+    <Space size={5} wrap>
+      <Tag color={terminal(run.executionStatus) ? 'default' : 'processing'}>
+        {executionLabels[run.executionStatus] || run.executionStatus}
+      </Tag>
+      {terminal(run.executionStatus) && (
+        <Tag
+          color={
+            run.conclusion === 'passed'
+              ? 'success'
+              : run.conclusion === 'failed'
+                ? 'error'
+                : 'warning'
+          }
+        >
+          {conclusionLabels[run.conclusion]}
+        </Tag>
+      )}
+      {run.config?.retrySourceRunId && <Tag color="blue">失败重跑</Tag>}
+    </Space>
+  );
+}
+function EvalMarkdown({ content }) {
+  const [html, setHtml] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    setHtml('');
+    void renderMarkdown(content).then((value) => {
+      if (!cancelled) setHtml(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [content]);
+  return <div className="markdown-body md-github" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+export function EvalPanel({
+  projectId,
+  projectPath,
+  query = '',
+  readOnly = false,
+  refreshToken = 0,
+  onSettings,
+}) {
+  const base = `/api/dashboard/projects/${encodeURIComponent(projectId)}/eval`;
+  const { message, modal } = App.useApp();
+  const [runs, setRuns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [mode, setMode] = useState(() =>
+    new URLSearchParams(window.location.search).get('run') ? 'detail' : 'list',
+  );
+  const [selectedId, setSelectedId] = useState(() =>
+    new URLSearchParams(window.location.search).get('run'),
+  );
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [tab, setTab] = useState('overview');
+  const [runFilter, setRunFilter] = useState('all');
+  const [caseDetail, setCaseDetail] = useState(null);
+  const [artifact, setArtifact] = useState(null);
+  const [artifactLoading, setArtifactLoading] = useState(false);
+  const [followLog, setFollowLog] = useState(true);
+  const [logError, setLogError] = useState(null);
+  const logView = useRef(null);
+  const [downloads, setDownloads] = useState([]);
+  const [comparison, setComparison] = useState(null);
+  const [baselineId, setBaselineId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [initialConfig, setInitialConfig] = useState(null);
+  const [reviewTarget, setReviewTarget] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const controller = useRef(null);
+  const artifactRequest = useRef(null);
+  const downloadRequests = useRef(new Map());
+  const active = useRef(true);
+  const selectedRef = useRef(selectedId);
+  const inFlight = useRef(false);
+  selectedRef.current = selectedId;
+  const refresh = useCallback(
+    async (manual = false) => {
+      if (readOnly || inFlight.current) return;
+      inFlight.current = true;
+      const current = new AbortController();
+      controller.current = current;
+      if (manual) setLoading(true);
+      try {
+        const data = await requestJson(
+          base,
+          `/runs${query ? `?q=${encodeURIComponent(query)}` : ''}`,
+          { signal: current.signal },
+        );
+        if (!active.current || current.signal.aborted) return;
+        setRuns(data.items ?? []);
+        setError(null);
+        const id = selectedRef.current;
+        if (id) {
+          const run = await requestJson(base, `/runs/${encodeURIComponent(id)}`, {
+            signal: current.signal,
+          });
+          if (active.current && selectedRef.current === id) setDetail(run);
+        }
+      } catch (err) {
+        if (active.current && err.name !== 'AbortError') setError(err.message);
+      } finally {
+        inFlight.current = false;
+        if (active.current) setLoading(false);
+      }
+    },
+    [base, query, readOnly],
+  );
+  useEffect(() => {
+    active.current = true;
+    void refresh();
+    const timer = setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, 3000);
+    return () => {
+      active.current = false;
+      controller.current?.abort();
+      artifactRequest.current?.abort();
+      for (const request of downloadRequests.current.values()) request.abort();
+      downloadRequests.current.clear();
+      clearInterval(timer);
+    };
+  }, [refresh]);
+  useEffect(() => {
+    if (refreshToken) void refresh(true);
+  }, [refreshToken, refresh]);
+  const openRun = async (run) => {
+    setSelectedId(run.id);
+    selectedRef.current = run.id;
+    setDetail(run);
+    setMode('detail');
+    setTab('overview');
+    setComparison(null);
+    locationFor(projectId, run.id);
+    setDetailLoading(true);
+    try {
+      const value = await requestJson(base, `/runs/${encodeURIComponent(run.id)}`);
+      if (active.current && selectedRef.current === run.id) setDetail(value);
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      if (active.current) setDetailLoading(false);
+    }
+  };
+  const back = () => {
+    setMode('list');
+    setSelectedId(null);
+    selectedRef.current = null;
+    setDetail(null);
+    setComparison(null);
+    locationFor(projectId, null);
+  };
+  const newRun = (config, review = false) => {
+    setInitialConfig(config ?? null);
+    setReviewTarget(review);
+    setMode('new');
+    setSelectedId(null);
+    selectedRef.current = null;
+    locationFor(projectId, null);
+  };
+  const setBaseline = async (run) => {
+    const apply = async () => {
+      controller.current?.abort();
+      const updated = await requestJson(base, `/runs/${encodeURIComponent(run.id)}/baseline`, {
+        body: run.baselineRunId ? { expectedPrevious: run.baselineRunId } : {},
+      });
+      if (!active.current) return;
+      setRuns((current) =>
+        current.map((item) =>
+          item.id === updated.id
+            ? updated
+            : item.baselineScope === updated.baselineScope
+              ? { ...item, isBaseline: false, baselineRunId: updated.id }
+              : item,
+        ),
+      );
+      if (selectedRef.current === run.id) setDetail(updated);
+      message.success('默认基线已设置');
+    };
+    if (run.baselineRunId && run.baselineRunId !== run.id) {
+      modal.confirm({
+        title: '替换默认基线？',
+        content: (
+          <Space direction="vertical">
+            <Text>原基线：{run.baselineRunId}</Text>
+            <Text>新基线：{run.id}</Text>
+            <Text type="secondary">保留历史结果及启动时绑定的参照。</Text>
+          </Space>
+        ),
+        okText: '确认替换',
+        cancelText: '取消',
+        onOk: async () => {
+          try {
+            await apply();
+          } catch (err) {
+            message.error(err.message);
+            throw err;
+          }
+        },
+      });
+    } else {
+      try {
+        await apply();
+      } catch (err) {
+        message.error(err.message);
+      }
+    }
+  };
+  const clearBaseline = (run) =>
+    modal.confirm({
+      title: '取消默认基线？',
+      content:
+        '仅取消当前目标和固定用例集的默认基线。历史结果、其他用例集的基线，以及运行启动时绑定的参照均保留。',
+      okText: '取消基线',
+      cancelText: '保留基线',
+      onOk: async () => {
+        try {
+          const updated = await requestJson(
+            base,
+            `/runs/${encodeURIComponent(run.id)}/baseline/clear`,
+            { body: {} },
+          );
+          if (!active.current) return;
+          setRuns((current) =>
+            current.map((item) =>
+              item.baselineScope === updated.baselineScope
+                ? { ...item, isBaseline: false, baselineRunId: null }
+                : item,
+            ),
+          );
+          if (selectedRef.current === run.id) setDetail(updated);
+          message.success('默认基线已取消');
+        } catch (err) {
+          message.error(err.message);
+          void refresh(true);
+          throw err;
+        }
+      },
+    });
+  const stop = async () => {
+    controller.current?.abort();
+    setBusy(true);
+    try {
+      setDetail(
+        await requestJson(base, `/runs/${encodeURIComponent(detail.id)}/stop`, { body: {} }),
+      );
+      message.info('停止请求已提交，正在核对进程与容器');
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const rerun = async (failedOnly = false) => {
+    setBusy(true);
+    try {
+      const preview = await requestJson(
+        base,
+        `/runs/${encodeURIComponent(detail.id)}/rerun-preview`,
+        { body: { failedOnly } },
+      );
+      newRun(preview.config);
+    } catch (err) {
+      message.error(err.message);
+      setError(err.message);
+      if (!failedOnly)
+        newRun({
+          ...detail.config,
+          targetType: detail.target.type === 'application' ? 'application' : 'skill',
+        });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const openArtifact = async (id) => {
+    const runId = detail.id;
+    artifactRequest.current?.abort();
+    const request = new AbortController();
+    artifactRequest.current = request;
+    setLogError(null);
+    setArtifactLoading(true);
+    setArtifact({ label: id, format: 'text', content: '' });
+    try {
+      const value = await requestJson(
+        base,
+        `/runs/${encodeURIComponent(runId)}/artifact?ref=${encodeURIComponent(id)}${id === 'execution.log' ? '&tail=1' : ''}`,
+        { signal: request.signal },
+      );
+      if (active.current && !request.signal.aborted && selectedRef.current === runId)
+        setArtifact({ ...value, label: id, runId });
+    } catch (err) {
+      if (err.name === 'AbortError' || !active.current) return;
+      message.error(err.message);
+      setArtifact(null);
+    } finally {
+      if (active.current && artifactRequest.current === request && !request.signal.aborted)
+        setArtifactLoading(false);
+    }
+  };
+  const downloadArtifact = async (id) => {
+    const runId = detail.id;
+    const key = `${runId}/${id}`;
+    if (downloadRequests.current.has(key)) return;
+    const request = new AbortController();
+    downloadRequests.current.set(key, request);
+    setDownloads((current) => [...current, key]);
+    try {
+      const value = await requestJson(
+        base,
+        `/runs/${encodeURIComponent(runId)}/artifact?ref=${encodeURIComponent(id)}`,
+        { signal: request.signal },
+      );
+      if (active.current && !request.signal.aborted && selectedRef.current === runId)
+        saveArtifact(value, `${runId}-${id.split('/').pop()}`);
+    } catch (err) {
+      if (err.name !== 'AbortError' && active.current) message.error(err.message);
+    } finally {
+      downloadRequests.current.delete(key);
+      if (active.current) setDownloads((current) => current.filter((item) => item !== key));
+    }
+  };
+  useEffect(() => {
+    if (artifact?.label !== 'execution.log' || !artifact.runId) return undefined;
+    const runId = artifact.runId;
+    const controller = new AbortController();
+    let pending = false;
+    const update = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const value = await requestJson(
+          base,
+          `/runs/${encodeURIComponent(runId)}/artifact?ref=execution.log&tail=1`,
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
+        setLogError(null);
+        setArtifact((current) => {
+          if (current?.runId !== runId || current?.label !== 'execution.log') return current;
+          if (current.content === value.content && current.truncated === value.truncated)
+            return current;
+          return { ...current, ...value };
+        });
+      } catch (error) {
+        if (!controller.signal.aborted) setLogError(error.message);
+      } finally {
+        pending = false;
+      }
+    };
+    void update();
+    const timer = terminal(detail?.executionStatus) ? null : setInterval(() => void update(), 3000);
+    return () => {
+      controller.abort();
+      if (timer) clearInterval(timer);
+    };
+  }, [base, artifact?.label, artifact?.runId, detail?.executionStatus]);
+  useEffect(() => {
+    if (artifact?.label !== 'execution.log' || !followLog) return;
+    const body = logView.current?.closest('.ant-drawer-body');
+    if (body) body.scrollTop = body.scrollHeight;
+  }, [artifact?.content, artifact?.label, followLog]);
+  const compare = async (id) => {
+    setBaselineId(id);
+    setBusy(true);
+    try {
+      setComparison(
+        await requestJson(
+          base,
+          `/runs/${encodeURIComponent(detail.id)}/compare?baseline=${encodeURIComponent(id)}`,
+        ),
+      );
+      setMode('compare');
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const baselineControl = (run) =>
+    run.isBaseline ? (
+      <Space size={4} wrap>
+        <Tag icon={<FlagOutlined />} color="blue">
+          默认基线
+        </Tag>
+        <Button size="small" type="text" onClick={() => clearBaseline(run)} disabled={readOnly}>
+          取消基线
+        </Button>
+      </Space>
+    ) : !run.baselineEligible ? (
+      <Tooltip title={run.baselineDisabledReason}>
+        <Button
+          type="text"
+          size="small"
+          className="dashboard-eval-unavailable"
+          icon={<InfoCircleOutlined />}
+          aria-label={`基线不可用：${run.baselineDisabledReason}`}
+        >
+          不可设为基线
+        </Button>
+      </Tooltip>
+    ) : (
+      <Button size="small" onClick={() => void setBaseline(run)} disabled={readOnly}>
+        {run.baselineRunId ? '替换默认基线' : '设为基线'}
+      </Button>
+    );
+  const filtered = runs.filter((run) =>
+    runFilter === 'active'
+      ? !terminal(run.executionStatus)
+      : runFilter === 'finished'
+        ? terminal(run.executionStatus)
+        : runFilter === 'baseline'
+          ? run.isBaseline
+          : true,
+  );
+  const list = (
+    <div className="dashboard-eval-stack">
+      <div className="dashboard-eval-heading dashboard-eval-masthead">
+        <div>
+          <Text className="dashboard-eval-eyebrow">EVAL / 项目评估</Text>
+          <Title level={3} className="dashboard-eval-title">
+            评估工作台
+          </Title>
+          <Text type="secondary">当前项目的评估运行与固定用例结果</Text>
+        </div>
+        <Space wrap>
+          <Button type="text" onClick={() => setGuideOpen(true)}>
+            使用指南
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={() => void refresh(true)} loading={loading}>
+            刷新
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => newRun()}
+            disabled={readOnly}
+          >
+            新建评估
+          </Button>
+        </Space>
+      </div>
+      <div className="dashboard-eval-summary-band" aria-label="评估记录统计">
+        <Metric label="运行记录" value={runs.length} />
+        <Metric
+          label="进行中"
+          value={runs.filter((run) => !terminal(run.executionStatus)).length}
+        />
+        <Metric
+          label="已结束 / 历史"
+          value={runs.filter((run) => terminal(run.executionStatus)).length}
+        />
+        <Metric
+          label="基线组"
+          value={runs.filter((run) => run.isBaseline).length}
+          detail="每套固定用例最多一个"
+        />
+      </div>
+      {!readOnly && (
+        <EvalPresetControls compact base={base} onApply={(config) => newRun(config, true)} />
+      )}
+      <div className="dashboard-eval-heading dashboard-eval-list-toolbar">
+        <Segmented
+          aria-label="运行筛选"
+          value={runFilter}
+          onChange={setRunFilter}
+          options={[
+            { value: 'all', label: '全部记录' },
+            { value: 'active', label: '进行中' },
+            { value: 'finished', label: '已结束' },
+            { value: 'baseline', label: '仅看基线' },
+          ]}
+        />
+        <Tooltip title="同一目标、固定用例与评分规则最多一个默认基线。完整但未通过的结果也可设置；可以替换或取消，历史证据保留。">
+          <Button type="text" size="small" icon={<InfoCircleOutlined />}>
+            基线规则
+          </Button>
+        </Tooltip>
+      </div>
+      {!loading && runs.length === 0 && <EvalFirstUse />}
+      {!loading && !filtered.length ? (
+        <Empty description={runs.length ? '没有符合筛选条件的记录' : '暂无评估记录'}>
+          <Paragraph type="secondary">
+            选择本地 Skill 或 SDK 应用，预检通过后开始第一次评估。
+          </Paragraph>
+          <Button type="primary" onClick={() => newRun()}>
+            新建评估
+          </Button>
+        </Empty>
+      ) : (
+        <Table
+          className="dashboard-eval-history-table"
+          rowKey="id"
+          loading={loading && !filtered.length}
+          dataSource={filtered}
+          pagination={{ ...evalPagination, pageSize: 15 }}
+          size="small"
+          columns={[
+            {
+              title: '目标 / 运行',
+              key: 'target',
+              onCell: (run) => ({
+                className: 'dashboard-eval-target-cell',
+                onClick: () => void openRun(run),
+              }),
+              render: (_, run) => (
+                <Button
+                  type="text"
+                  className="dashboard-eval-run-entry"
+                  aria-label={run.target.name}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void openRun(run);
+                  }}
+                >
+                  <span className="dashboard-eval-target-info">
+                    <span className="dashboard-eval-target-name">{run.target.name}</span>
+                    <span className="dashboard-eval-secondary">
+                      {run.target.version ?? '—'} ·{' '}
+                      {run.origin === 'dashboard' ? 'Dashboard' : 'CLI / 历史'}
+                    </span>
+                    <span className="dashboard-eval-secondary dashboard-eval-run-id" title={run.id}>
+                      {run.id}
+                    </span>
+                  </span>
+                  <span className="dashboard-eval-target-cta" aria-hidden="true">
+                    查看详情 <RightOutlined />
+                  </span>
+                </Button>
+              ),
+            },
+            { title: '状态', key: 'status', render: (_, run) => <RunStatus run={run} /> },
+            {
+              title: '通过用例',
+              key: 'passed',
+              render: (_, run) => (
+                <span className="dashboard-eval-numeric">
+                  {run.passed} / {run.expectedTotal ?? run.total}
+                  <br />
+                  <Text type="secondary">{numeric(run.metrics.durationSeconds, ' 秒')}</Text>
+                </span>
+              ),
+            },
+            {
+              title: '模型',
+              key: 'model',
+              responsive: ['lg'],
+              render: (_, run) => (
+                <span>
+                  {run.config.model ?? run.cases[0]?.model ?? '—'}
+                  <br />
+                  <Text type="secondary">{run.config.agent ?? '—'}</Text>
+                </span>
+              ),
+            },
+            { title: '基线', key: 'baseline', render: (_, run) => baselineControl(run) },
+          ]}
+        />
+      )}
+    </div>
+  );
+  const candidates = detail
+    ? runs.filter(
+        (run) =>
+          run.id !== detail.id &&
+          run.baselineEligible &&
+          run.baselineScope &&
+          run.baselineScope === detail.baselineScope,
+      )
+    : [];
+  const defaultReference = detail?.boundBaselineRunId || detail?.baselineRunId;
+  return (
+    <section className="dashboard-eval-page" aria-label="Eval 工作台">
+      <EvalGuideDrawer
+        open={guideOpen}
+        onClose={() => setGuideOpen(false)}
+        onSettings={() => {
+          setGuideOpen(false);
+          onSettings?.();
+        }}
+      />
+      {error && (
+        <Alert
+          closable
+          type="error"
+          showIcon
+          message="Eval 数据读取失败"
+          description={
+            <>
+              <Paragraph>{evalDisplayError(error)}</Paragraph>
+              <EvalErrorGuide error={error} />
+            </>
+          }
+          action={
+            <Button size="small" onClick={() => void refresh(true)}>
+              重试
+            </Button>
+          }
+          onClose={() => setError(null)}
+        />
+      )}
+      {readOnly ? (
+        <Empty description="Eval 操作仅在本地 Dashboard 中提供" />
+      ) : mode === 'new' ? (
+        <EvalCreate
+          base={base}
+          projectPath={projectPath}
+          onSettings={onSettings}
+          settingsRefreshToken={refreshToken}
+          initialConfig={initialConfig}
+          reviewTarget={reviewTarget}
+          onGuide={() => setGuideOpen(true)}
+          onBack={back}
+          onStarted={(run) => {
+            setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
+            void openRun(run);
+          }}
+          runs={runs}
+        />
+      ) : mode === 'list' ? (
+        list
+      ) : !detail ? (
+        <Spin tip="读取评估记录…" />
+      ) : mode === 'compare' ? (
+        <div className="dashboard-eval-stack">
+          <Button
+            className="dashboard-eval-back"
+            icon={<ArrowLeftOutlined />}
+            onClick={() => setMode('detail')}
+          >
+            返回详情
+          </Button>
+          <Title level={3}>与基线对比</Title>
+          <Text type="secondary">临时参照只影响当前查看，不修改默认基线。</Text>
+          <Select
+            aria-label="临时参照"
+            value={baselineId ?? undefined}
+            options={candidates.map((run) => ({
+              value: run.id,
+              label: `${run.target.name} · ${run.target.version ?? '—'} · ${run.id}`,
+            }))}
+            onChange={(id) => void compare(id)}
+            loading={busy}
+          />
+          <EvalComparison value={comparison} />
+        </div>
+      ) : (
+        <div className="dashboard-eval-stack dashboard-eval-detail">
+          <div className="dashboard-eval-heading dashboard-eval-breadcrumb">
+            <Button type="text" icon={<ArrowLeftOutlined />} onClick={back}>
+              运行记录
+            </Button>
+            <Text type="secondary" className="dashboard-eval-run-id" title={detail.id}>
+              {detail.id}
+            </Text>
+          </div>
+          <div className="dashboard-eval-heading dashboard-eval-masthead">
+            <div>
+              <Title level={3} className="dashboard-eval-title">
+                {detail.target.name}
+              </Title>
+              <Text type="secondary">
+                {detail.target.version ?? '无版本信息'} ·{' '}
+                {detail.target.type === 'application' ? 'SDK 应用' : 'Skill'}
+              </Text>
+            </div>
+            <RunStatus run={detail} />
+          </div>
+          <EvalRunProgress run={detail} />
+          {detail.config.retrySourceRunId && (
+            <Alert
+              type="info"
+              showIcon
+              message="本次仅重跑失败用例"
+              description={`原记录：${detail.config.retrySourceRunId}。本次通过不代表完整用例集通过，不能替换完整基线或 SDK 应用验收。`}
+            />
+          )}
+          {detail.executionStatus === 'stopping' && (
+            <Alert
+              type="warning"
+              showIcon
+              message="正在核对进程与实验容器是否停止，现有结果将保留"
+            />
+          )}
+          {detail.failures?.length > 0 && (
+            <Alert
+              type="warning"
+              message="评估限制或执行问题"
+              description={detail.failures.join('\n')}
+              showIcon
+            />
+          )}
+          {detail.diagnostics?.length > 0 && (
+            <Alert
+              type="warning"
+              message="部分产物不可读取"
+              description={detail.diagnostics.join('\n')}
+            />
+          )}
+          <Space wrap className="dashboard-eval-actions">
+            {detail.availableActions.stop && (
+              <Button
+                danger
+                loading={busy}
+                onClick={() => void stop()}
+                disabled={detail.executionStatus === 'stopping'}
+              >
+                停止评估
+              </Button>
+            )}
+            {detail.availableActions.rerun && (
+              <Button type="primary" loading={busy} onClick={() => void rerun()}>
+                修改配置后重新评估
+              </Button>
+            )}
+            {detail.availableActions.rerun &&
+              detail.cases?.some((item) => item.passed === false) && (
+                <Button loading={busy} onClick={() => void rerun(true)}>
+                  只重跑失败用例
+                </Button>
+              )}
+            {detail.availableActions.compare && (
+              <Button
+                onClick={() => {
+                  if (defaultReference && defaultReference !== detail.id)
+                    void compare(defaultReference);
+                  else {
+                    setComparison(null);
+                    setBaselineId(null);
+                    setMode('compare');
+                  }
+                }}
+              >
+                与基线对比
+              </Button>
+            )}
+            <Button type="text" onClick={() => setGuideOpen(true)}>
+              使用指南
+            </Button>
+            <Button type="text" onClick={() => void refresh(true)} icon={<ReloadOutlined />}>
+              刷新状态
+            </Button>
+          </Space>
+          <div className="dashboard-eval-context-strip">
+            <div className="dashboard-eval-context-section">
+              <div className="dashboard-eval-heading">
+                <Text className="dashboard-eval-section-label">
+                  <FlagOutlined /> 默认参照
+                </Text>
+                <Space size={4}>
+                  {baselineControl(detail)}
+                  <Tooltip title="同一目标与固定用例集最多一个，可替换或取消。">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<InfoCircleOutlined />}
+                      aria-label="基线规则"
+                    />
+                  </Tooltip>
+                </Space>
+              </div>
+              <Text className="dashboard-eval-context-id" title={detail.baselineRunId ?? ''}>
+                默认基线：{detail.baselineRunId ?? '未设置'}
+              </Text>
+              {detail.boundBaselineRunId && (
+                <Text
+                  type="secondary"
+                  className="dashboard-eval-context-id"
+                  title={detail.boundBaselineRunId}
+                >
+                  启动时绑定：{detail.boundBaselineRunId}
+                </Text>
+              )}
+            </div>
+            <div className="dashboard-eval-context-section">
+              <Text className="dashboard-eval-section-label">
+                <FileTextOutlined /> 评估报告
+              </Text>
+              <Space direction="vertical" size="small">
+                <Space wrap>
+                  {[
+                    ['summary.md', 'Markdown'],
+                    ['summary.html', 'HTML'],
+                  ].map(([id, label]) => (
+                    <Space.Compact key={id}>
+                      <Button
+                        aria-label={`预览 ${label}`}
+                        icon={<EyeOutlined />}
+                        disabled={!detail.artifacts?.some((item) => item.id === id)}
+                        onClick={() => void openArtifact(id)}
+                      >
+                        预览 {label}
+                      </Button>
+                      <Tooltip title={`下载 ${label}`}>
+                        <Button
+                          aria-label={`下载 ${label}`}
+                          icon={<DownloadOutlined />}
+                          disabled={!detail.artifacts?.some((item) => item.id === id)}
+                          loading={downloads.includes(`${detail.id}/${id}`)}
+                          onClick={() => void downloadArtifact(id)}
+                        />
+                      </Tooltip>
+                    </Space.Compact>
+                  ))}
+                </Space>
+                <Text type="secondary" className="dashboard-eval-secondary">
+                  {detail.artifacts?.some((item) =>
+                    ['summary.md', 'summary.html'].includes(item.id),
+                  )
+                    ? '可直接预览或下载已生成的报告，其他文件在「日志与产物」中查看。'
+                    : terminal(detail.executionStatus)
+                      ? '本次运行未生成报告，可在「日志与产物」中查看执行日志。'
+                      : '报告生成后即可预览或下载，页面会自动更新。'}
+                </Text>
+              </Space>
+            </div>
+          </div>
+          <Spin spinning={detailLoading}>
+            <Tabs
+              tabBarGutter={16}
+              activeKey={tab}
+              onChange={setTab}
+              items={[
+                { key: 'overview', label: '结果概览', children: <EvalOverview run={detail} /> },
+                {
+                  key: 'cases',
+                  label: '用例结果',
+                  children: <EvalCases run={detail} onSelect={setCaseDetail} />,
+                },
+                ...(detail.target.type === 'application'
+                  ? [
+                      {
+                        key: 'coverage',
+                        label: 'SDK 覆盖',
+                        children: <EvalCoverage run={detail} />,
+                      },
+                    ]
+                  : []),
+                {
+                  key: 'logs',
+                  label: '日志与产物',
+                  children: (
+                    <EvalArtifacts
+                      run={detail}
+                      downloads={downloads}
+                      onOpen={(id) => void openArtifact(id)}
+                      onDownload={(id) => void downloadArtifact(id)}
+                    />
+                  ),
+                },
+                { key: 'config', label: '执行配置', children: <EvalConfiguration run={detail} /> },
+              ]}
+            />
+          </Spin>
+        </div>
+      )}
+      <Drawer
+        open={!!caseDetail}
+        onClose={() => setCaseDetail(null)}
+        title={caseDetail?.task ?? '用例详情'}
+        width={960}
+        rootClassName="dashboard-eval-drawer"
+        destroyOnHidden
+      >
+        <EvalCaseEvidence
+          value={caseDetail}
+          onArtifact={(id) => {
+            setCaseDetail(null);
+            void openArtifact(id);
+          }}
+        />
+      </Drawer>
+      <Drawer
+        open={!!artifact}
+        onClose={() => {
+          artifactRequest.current?.abort();
+          setArtifact(null);
+        }}
+        title={artifact?.label ?? '报告预览'}
+        width={900}
+        rootClassName={`dashboard-eval-drawer dashboard-eval-artifact-drawer${artifact?.format === 'html' ? ' dashboard-eval-html-drawer' : ''}`}
+        destroyOnHidden
+        extra={
+          <Space size={12} wrap>
+            {artifact?.label === 'execution.log' && (
+              <Space size={6}>
+                <Text type="secondary">跟随最新</Text>
+                <Switch
+                  aria-label="跟随最新日志"
+                  size="small"
+                  checked={followLog}
+                  onChange={setFollowLog}
+                />
+              </Space>
+            )}
+            <Button
+              icon={<DownloadOutlined />}
+              disabled={artifactLoading || !artifact}
+              onClick={() =>
+                artifact.label === 'execution.log'
+                  ? void downloadArtifact(artifact.label)
+                  : saveArtifact(artifact, `${artifact.runId}-${artifact.label.split('/').pop()}`)
+              }
+            >
+              下载文件
+            </Button>
+          </Space>
+        }
+      >
+        {artifact?.label === 'execution.log' && (
+          <Paragraph type="secondary">
+            {artifact.truncated
+              ? '显示最近 256 KB 日志，下载可获取完整文件。'
+              : '运行期间自动更新日志。'}
+            {logError && `更新失败：${logError}`}
+          </Paragraph>
+        )}
+        <Spin spinning={artifactLoading}>
+          {artifact?.format === 'markdown' ? (
+            <EvalMarkdown content={artifact.content} />
+          ) : artifact?.format === 'html' ? (
+            <iframe
+              title="Eval HTML 报告"
+              sandbox="allow-scripts"
+              className="dashboard-eval-report-frame"
+              srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">${artifact.content}`}
+            />
+          ) : (
+            <pre ref={logView} className="dashboard-eval-pre">
+              {artifact?.content}
+            </pre>
+          )}
+        </Spin>
+      </Drawer>
+    </section>
+  );
+}
+
+const inferTargetType = (target) =>
+  /(?:^|[\\/])application\.json$/u.test(String(target ?? '').trim()) ? 'application' : 'skill';
+
+function EvalCreate({
+  base,
+  projectPath,
+  onSettings,
+  settingsRefreshToken,
+  initialConfig,
+  reviewTarget,
+  onGuide,
+  onBack,
+  onStarted,
+  runs,
+}) {
+  const [form] = Form.useForm();
+  const { message } = App.useApp();
+  const [step, setStep] = useState(initialConfig && !reviewTarget ? 2 : 0);
+  const [seedConfig, setSeedConfig] = useState(initialConfig);
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [task, setTask] = useState(null);
+  const [error, setError] = useState(null);
+  const [agents, setAgents] = useState(['claude-code', 'codex', 'qoder', 'codebuddy']);
+  const launchId = useRef(null);
+  const live = useRef(true);
+  const overrides = useRef(new Set(Object.keys(initialConfig ?? {})));
+  const [userSettings, setUserSettings] = useState(null);
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const targetTypeSelection =
+    Form.useWatch('targetType', form) ?? initialConfig?.targetType ?? 'auto';
+  const targetPath = Form.useWatch('target', form);
+  const targetType =
+    targetTypeSelection === 'auto' ? inferTargetType(targetPath) : targetTypeSelection;
+  const judgeEnabled = Form.useWatch('judgeEnabled', form);
+  Form.useWatch([], form);
+  const summaryConfig = preview?.config ?? form.getFieldsValue(true);
+  const budgetFor = (type) => ({
+    timeoutSeconds:
+      userSettings?.defaults?.[`${type}TimeoutSeconds`] ?? (type === 'application' ? 1200 : 600),
+    maxTurns: userSettings?.defaults?.[`${type}MaxTurns`] ?? (type === 'application' ? 8 : 40),
+  });
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch('/api/dashboard/eval/settings', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error();
+        return response.json();
+      })
+      .then((value) => {
+        if (controller.signal.aborted || !value.defaults) return;
+        setUserSettings(value);
+        const type =
+          form.getFieldValue('targetType') === 'application' ||
+          (form.getFieldValue('targetType') === 'auto' &&
+            inferTargetType(form.getFieldValue('target')) === 'application')
+            ? 'application'
+            : 'skill';
+        const defaults = {
+          ...Object.fromEntries(
+            [
+              'agent',
+              'model',
+              'baseUrl',
+              'judgeEnabled',
+              'judgeAgent',
+              'judgeModel',
+              'judgeBaseUrl',
+            ].map((key) => [key, value.defaults[key]]),
+          ),
+          timeoutSeconds: value.defaults[`${type}TimeoutSeconds`],
+          maxTurns: value.defaults[`${type}MaxTurns`],
+        };
+        form.setFieldsValue(
+          Object.fromEntries(
+            Object.entries(defaults).filter(([key]) => !overrides.current.has(key)),
+          ),
+        );
+        setPreview(null);
+        launchId.current = null;
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [form, settingsRefreshToken]);
+  useEffect(() => {
+    live.current = true;
+    const controller = new AbortController();
+    void requestJson(base, '/capabilities', { signal: controller.signal })
+      .then((data) => {
+        if (live.current && data.agents?.length) setAgents(data.agents);
+      })
+      .catch(() => {});
+    return () => {
+      live.current = false;
+      controller.abort();
+    };
+  }, [base]);
+  const configuration = () => {
+    const values = form.getFieldsValue(true);
+    const config = { ...seedConfig, ...values };
+    if (config.targetType === 'auto') delete config.targetType;
+    if (!config.judgeEnabled) {
+      delete config.judgeAgent;
+      delete config.judgeModel;
+      delete config.judgeBaseUrl;
+    }
+    delete config.baselineRunId;
+    for (const key of Object.keys(config))
+      if (config[key] === '' || config[key] === undefined || config[key] === null)
+        delete config[key];
+    if (targetType === 'application') {
+      delete config.quick;
+      delete config.task;
+      delete config.profile;
+      delete config.baseUrl;
+      delete config.judgeBaseUrl;
+      config.suite = 'local';
+    }
+    return config;
+  };
+  const inspect = async (advance = false) => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (step !== 1) await form.validateFields();
+      if (!String(form.getFieldValue('target') ?? '').trim()) throw new Error('请选择本地目标路径');
+      const value = await requestJson(base, '/preview', { body: configuration() });
+      if (!live.current) return;
+      setPreview(value);
+      launchId.current = crypto.randomUUID();
+      if (advance) setStep((current) => Math.min(2, current + 1));
+    } catch (err) {
+      if (live.current) setError(err.message || '请补齐目标配置');
+    } finally {
+      if (live.current) setBusy(false);
+    }
+  };
+  const start = async () => {
+    if (starting || !preview || preview.blockedReasons.length) return;
+    setStarting(true);
+    setError(null);
+    try {
+      const baselineRunId = form.getFieldValue('baselineRunId') ?? null;
+      const run = await requestJson(base, '/runs', {
+        body: {
+          config: preview.config,
+          confirmationHash: preview.confirmationHash,
+          requestId: launchId.current,
+          baselineRunId,
+        },
+      });
+      if (live.current) onStarted(run);
+    } catch (err) {
+      if (live.current) {
+        setError(err.message);
+        if (err.status === 409) setPreview(null);
+      }
+    } finally {
+      if (live.current) setStarting(false);
+    }
+  };
+  const options = agents.map((value) => ({ value }));
+  const baselineCandidates = runs.filter(
+    (run) => run.isBaseline && run.baselineEligible && preview?.target.id === run.target.id,
+  );
+  return (
+    <div className="dashboard-eval-stack dashboard-eval-create">
+      <div className="dashboard-eval-heading dashboard-eval-masthead">
+        <div>
+          <Text className="dashboard-eval-eyebrow">EVAL / 新运行</Text>
+          <Title level={3} className="dashboard-eval-title">
+            新建评估
+          </Title>
+          <Text type="secondary">固定目标与用例，检查环境后开始执行。</Text>
+        </div>
+        <Space wrap>
+          <Button type="text" onClick={onGuide}>
+            使用指南
+          </Button>
+          <Button onClick={onBack} disabled={starting}>
+            返回记录
+          </Button>
+        </Space>
+      </div>
+      <EvalPresetControls
+        compact
+        base={base}
+        configuration={configuration}
+        onApply={(config) => {
+          const cleared = Object.fromEntries(
+            Object.keys(form.getFieldsValue(true)).map((key) => [key, undefined]),
+          );
+          form.setFieldsValue({
+            ...cleared,
+            ...config,
+            targetType: config.targetType ?? 'auto',
+            judgeEnabled: config.judgeEnabled ?? Boolean(config.judgeModel),
+          });
+          setSeedConfig(config);
+          overrides.current = new Set(Object.keys(config));
+          setPreview(null);
+          setError(null);
+          launchId.current = null;
+          setStep(0);
+        }}
+      />
+      {seedConfig?.retrySourceRunId && (
+        <Alert
+          type="info"
+          showIcon
+          message={`失败用例重跑 · 原记录 ${seedConfig.retrySourceRunId}`}
+          description="仅执行原记录中失败的组合，完整用例和基线保持原状；环境异常也可在修复后重跑。"
+        />
+      )}
+      <Steps
+        current={step}
+        items={[{ title: '目标与快照' }, { title: '用例与标准' }, { title: '执行与确认' }]}
+      />
+      {error && (
+        <Alert
+          type="error"
+          showIcon
+          message="评估配置需要调整"
+          description={
+            <>
+              <Paragraph>{evalDisplayError(error)}</Paragraph>
+              <EvalErrorGuide error={error} />
+            </>
+          }
+        />
+      )}
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          targetType: 'auto',
+          suite: 'local',
+          timeoutSeconds: 1200,
+          maxTurns: 8,
+          judgeEnabled: initialConfig
+            ? (initialConfig.judgeEnabled ?? Boolean(initialConfig.judgeModel))
+            : undefined,
+          ...initialConfig,
+        }}
+        onValuesChange={(changed) => {
+          for (const key of Object.keys(changed)) overrides.current.add(key);
+          if (Object.keys(changed).every((key) => key === 'baselineRunId')) return;
+          setPreview(null);
+          setError(null);
+          if (
+            step === 0 &&
+            typeof changed.target === 'string' &&
+            form.getFieldValue('targetType') === 'auto'
+          ) {
+            const type = inferTargetType(changed.target);
+            form.setFieldsValue(
+              Object.fromEntries(
+                Object.entries(budgetFor(type)).filter(([key]) => !overrides.current.has(key)),
+              ),
+            );
+          }
+          launchId.current = null;
+        }}
+      >
+        {step === 0 && (
+          <Card size="small" title="评估目标">
+            <Form.Item label="目标类型" name="targetType">
+              <Select
+                options={[
+                  { value: 'auto', label: '自动识别（推荐）' },
+                  { value: 'application', label: 'SDK 应用' },
+                  { value: 'skill', label: 'Skill / Eval manifest' },
+                ]}
+                onChange={(type) => {
+                  form.setFieldsValue({
+                    previousExperimentId: undefined,
+                    quick: false,
+                    task: undefined,
+                    ...Object.fromEntries(
+                      Object.entries(
+                        budgetFor(
+                          type === 'auto' ? inferTargetType(form.getFieldValue('target')) : type,
+                        ),
+                      ).filter(([key]) => !overrides.current.has(key)),
+                    ),
+                  });
+                }}
+              />
+            </Form.Item>
+            <Form.Item
+              label="目标路径"
+              name="target"
+              rules={[{ required: true, message: '请选择本地目标路径' }]}
+              extra={
+                <Text type="secondary" className="dashboard-eval-secondary">
+                  支持本机绝对路径；相对路径基于当前选中的项目
+                  {projectPath ? `：${projectPath}` : ''}。
+                </Text>
+              }
+            >
+              <Input
+                placeholder={
+                  targetTypeSelection === 'auto'
+                    ? 'Skill 目录、SKILL.md、comet/eval.yaml 或 application.json'
+                    : targetType === 'application'
+                      ? '.comet/applications/example/application.json'
+                      : 'Skill 目录、SKILL.md 或 comet/eval.yaml'
+                }
+              />
+            </Form.Item>
+            <Form.Item
+              label={targetType === 'application' ? '评估目标' : '评估目的（记录备注）'}
+              name="goal"
+            >
+              <Input.TextArea
+                rows={3}
+                maxLength={4000}
+                placeholder="希望验证的任务、用户决定或恢复行为"
+              />
+            </Form.Item>
+            <Text type="secondary">选择与预览不会调用模型。目标内容和依赖在正式运行时固定。</Text>
+          </Card>
+        )}
+        {step === 1 && (
+          <div className="dashboard-eval-stack">
+            <Card title="目标与用例身份" size="small">
+              {preview ? (
+                <Descriptions
+                  size="small"
+                  column={1}
+                  items={[
+                    {
+                      key: 'target',
+                      label: '目标',
+                      children: `${preview.target.name} · ${preview.target.version ?? '无版本信息'}`,
+                    },
+                    { key: 'path', label: '路径', children: preview.target.path },
+                    {
+                      key: 'content',
+                      label: '内容身份',
+                      children: <Text code>{preview.target.contentHash}</Text>,
+                    },
+                    {
+                      key: 'source',
+                      label: '用例来源',
+                      children: sourceLabels[preview.taskSource] ?? preview.taskSource,
+                    },
+                  ]}
+                />
+              ) : (
+                <Alert
+                  type="info"
+                  message="配置发生变化，请重新收集目标与用例"
+                  action={
+                    <Button onClick={() => void inspect()} loading={busy}>
+                      收集用例
+                    </Button>
+                  }
+                />
+              )}
+            </Card>
+            {preview?.taskSource === 'pending-generation' ? (
+              <Alert
+                type="info"
+                showIcon
+                message={`正式运行时生成并固定 ${preview.taskCount.min}–${preview.taskCount.max} 个用例`}
+                description="尚未生成具体用例。生成会调用模型，费用与用例执行费用分别记录。"
+              />
+            ) : preview?.tasks?.length ? (
+              <EvalSection
+                title="固定用例"
+                description="查看输入与判定标准，确认这些用例能回答本次评估目标。"
+                extra={<Tag>{preview.tasks.length} 个用例</Tag>}
+              >
+                <div className="dashboard-eval-file-list">
+                  {preview.tasks.map((item) => (
+                    <div className="dashboard-eval-file-row" key={item.name}>
+                      <FileTextOutlined />
+                      <div className="dashboard-eval-file-name">
+                        <Button
+                          className="dashboard-eval-target"
+                          type="link"
+                          onClick={() => setTask(item)}
+                        >
+                          {item.name}
+                        </Button>
+                        <Text className="dashboard-eval-case-excerpt" type="secondary">
+                          {item.instruction ?? '由固定用例模板提供输入'}
+                        </Text>
+                      </div>
+                      <Button
+                        type="text"
+                        onClick={() => setTask(item)}
+                        aria-label={`查看用例 ${item.name}`}
+                      >
+                        查看标准
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </EvalSection>
+            ) : (
+              <Empty description="没有可执行用例，请检查目标配置" />
+            )}
+            {targetType === 'skill' && (
+              <Card size="small" title="用例选择">
+                <Form.Item name="quick" valuePropName="checked">
+                  <Checkbox>使用快速冒烟用例</Checkbox>
+                </Form.Item>
+                <Form.Item label="指定用例（可选）" name="task">
+                  <Input placeholder="使用 manifest 中已声明或内置用例的名称" />
+                </Form.Item>
+                <Button loading={busy} onClick={() => void inspect()}>
+                  更新用例预览
+                </Button>
+              </Card>
+            )}
+            <Text type="secondary">
+              已有固定用例可查看输入与判定标准。自动生成的用例会在正式运行时固定。
+            </Text>
+          </div>
+        )}
+        {step === 2 && (
+          <div className="dashboard-eval-stack dashboard-eval-execution-grid">
+            <Card size="small" className="dashboard-eval-settings-summary">
+              <div className="dashboard-eval-heading">
+                <div>
+                  <Text strong>全局 Eval 设置</Text>
+                  <br />
+                  <Text type="secondary">
+                    {userSettings?.defaults
+                      ? `${userSettings.defaults.agent} · ${userSettings.defaults.model || '运行时默认模型'}`
+                      : '模型与凭据可在设置中统一配置'}
+                    。本次可调整执行参数。
+                  </Text>
+                </div>
+                <Button onClick={onSettings}>编辑 Eval 设置</Button>
+              </div>
+            </Card>
+            <Card title="执行配置" size="small">
+              <Descriptions
+                size="small"
+                column={1}
+                items={[
+                  {
+                    key: 'agent',
+                    label: '执行 Agent',
+                    children: summaryConfig.agent || '运行时默认',
+                  },
+                  {
+                    key: 'model',
+                    label: '执行模型',
+                    children: summaryConfig.model || '运行时默认',
+                  },
+                  {
+                    key: 'judge',
+                    label: '独立 Judge',
+                    children:
+                      summaryConfig.judgeEnabled === false || !summaryConfig.judgeModel
+                        ? '未启用'
+                        : `${summaryConfig.judgeAgent || '默认 Agent'} / ${summaryConfig.judgeModel}`,
+                  },
+                  {
+                    key: 'budget',
+                    label: '执行预算',
+                    children: `${summaryConfig.timeoutSeconds ?? '—'} 秒 / ${summaryConfig.maxTurns ?? '—'} 轮`,
+                  },
+                ]}
+              />
+              <Button
+                type="text"
+                className="dashboard-eval-override-toggle"
+                aria-expanded={overrideOpen}
+                aria-controls="eval-run-overrides"
+                onClick={() => setOverrideOpen((value) => !value)}
+              >
+                {overrideOpen ? '收起临时覆盖' : '临时覆盖本次配置'}
+              </Button>
+              <div id="eval-run-overrides" hidden={!overrideOpen}>
+                <div className="dashboard-eval-form-section">
+                  <EvalSection
+                    title="执行模型"
+                    description="选择适配器与模型，留空的值沿用运行环境。"
+                  />
+                  <div className="dashboard-eval-form-grid">
+                    <Form.Item label="执行 Agent" name="agent">
+                      <AutoComplete options={options} placeholder="内置或已安装的适配器 ID" />
+                    </Form.Item>
+                    <Form.Item label="执行模型" name="model">
+                      <Input placeholder="留空沿用目标或当前环境配置" />
+                    </Form.Item>
+                  </div>
+                </div>
+                <div className="dashboard-eval-form-section">
+                  <EvalSection
+                    title="独立判定"
+                    description="需要单独的判定模型时，配置独立 Judge。"
+                  />
+                  <Form.Item name="judgeEnabled" valuePropName="checked">
+                    <Checkbox>配置独立 Judge</Checkbox>
+                  </Form.Item>
+                  {judgeEnabled && (
+                    <div className="dashboard-eval-form-grid">
+                      <Form.Item label="Judge Agent" name="judgeAgent">
+                        <AutoComplete options={options} placeholder="独立 Judge 的 Agent" />
+                      </Form.Item>
+                      <Form.Item
+                        label="Judge 模型"
+                        name="judgeModel"
+                        rules={[{ required: true, message: '请指定 Judge 模型' }]}
+                      >
+                        <Input />
+                      </Form.Item>
+                    </div>
+                  )}
+                </div>
+                <div className="dashboard-eval-form-section">
+                  <EvalSection title="执行预算" description="达到总时限或轮数上限时停止执行。" />
+                  <div className="dashboard-eval-form-grid">
+                    <Form.Item label="评估总时限（秒）" name="timeoutSeconds">
+                      <InputNumber
+                        min={30}
+                        max={targetType === 'application' ? 3600 : 86400}
+                        style={{ width: '100%' }}
+                      />
+                    </Form.Item>
+                    <Form.Item label="最大执行轮数" name="maxTurns">
+                      <InputNumber
+                        min={1}
+                        max={targetType === 'application' ? 32 : 200}
+                        style={{ width: '100%' }}
+                      />
+                    </Form.Item>
+                  </div>
+                </div>
+                <div className="dashboard-eval-form-section">
+                  <EvalSection title="报告与环境" />
+                  {targetType === 'skill' && (
+                    <div className="dashboard-eval-form-grid">
+                      <Form.Item label="报告与追踪去向" name="suite">
+                        <Select
+                          options={[
+                            { value: 'local', label: '本地' },
+                            { value: 'langsmith', label: 'LangSmith' },
+                            { value: 'langfuse', label: 'Langfuse' },
+                          ]}
+                        />
+                      </Form.Item>
+                      <Form.Item label="执行端点覆盖（可选）" name="baseUrl">
+                        <Input placeholder="https://provider.example/v1" />
+                      </Form.Item>
+                      <Form.Item label="评估 Profile（可选）" name="profile">
+                        <Input placeholder="沿用目标配置" />
+                      </Form.Item>
+                      {judgeEnabled && (
+                        <Form.Item label="Judge 端点覆盖（可选）" name="judgeBaseUrl">
+                          <Input />
+                        </Form.Item>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {targetType === 'application' && (
+                  <Text type="secondary">
+                    SDK 应用使用完整固定用例和 local 模式；端点由执行环境提供，每个用例执行一次。
+                  </Text>
+                )}
+              </div>
+            </Card>
+            <Card title="预检与执行摘要" size="small">
+              <Button icon={<ReloadOutlined />} loading={busy} onClick={() => void inspect()}>
+                检查目标与执行环境
+              </Button>
+              {preview && (
+                <div className="dashboard-eval-stack">
+                  <Descriptions
+                    className="dashboard-eval-preflight-summary"
+                    size="small"
+                    column={1}
+                    items={[
+                      {
+                        key: 'target',
+                        label: '目标',
+                        children: `${preview.target.name} · ${preview.target.version ?? '—'}`,
+                      },
+                      {
+                        key: 'cases',
+                        label: '用例',
+                        children:
+                          preview.taskCount.min === preview.taskCount.max
+                            ? `${preview.taskCount.min} 个固定用例`
+                            : `待生成 ${preview.taskCount.min}–${preview.taskCount.max} 个`,
+                      },
+                      {
+                        key: 'limits',
+                        label: '预算',
+                        children: `${preview.config.timeoutSeconds} 秒 / ${preview.config.maxTurns} 轮`,
+                      },
+                      {
+                        key: 'agent',
+                        label: '执行 Agent / 模型',
+                        children: `${preview.config.agent} / ${preview.config.model ?? '运行时默认'}`,
+                      },
+                      {
+                        key: 'judge',
+                        label: '独立 Judge',
+                        children: preview.config.judgeModel
+                          ? `${preview.config.judgeAgent} / ${preview.config.judgeModel}`
+                          : '未启用',
+                      },
+                      {
+                        key: 'cost',
+                        label: '费用',
+                        children: '会调用模型；当前无法提供完整费用估算',
+                      },
+                    ]}
+                  />
+                  <div className="dashboard-eval-checks">
+                    {preview.environment.map((check) => (
+                      <div key={check.id}>
+                        <Tag
+                          color={
+                            check.status === 'available'
+                              ? 'success'
+                              : check.status === 'missing'
+                                ? 'error'
+                                : 'default'
+                          }
+                        >
+                          {check.label}
+                        </Tag>
+                        <Text>{evalDisplayError(check.detail)}</Text>
+                      </div>
+                    ))}
+                  </div>
+                  {preview.blockedReasons.length > 0 && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message="当前无法开始评估"
+                      description={
+                        <>
+                          <Paragraph>
+                            {evalDisplayError(preview.blockedReasons.join('\n'))}
+                          </Paragraph>
+                          <EvalErrorGuide
+                            error={preview.blockedReasons.join('\n')}
+                            onSettings={onSettings}
+                          />
+                        </>
+                      }
+                    />
+                  )}
+                  {preview.limitations.map((limit, index) => (
+                    <Text key={index} type="secondary">
+                      {limit}
+                    </Text>
+                  ))}
+                  {baselineCandidates.length > 0 && (
+                    <Form.Item label="启动时绑定的基线（可选）" name="baselineRunId">
+                      <Select
+                        allowClear
+                        options={baselineCandidates.map((run) => ({
+                          value: run.id,
+                          label: `${run.target.name} · ${run.id}`,
+                        }))}
+                      />
+                    </Form.Item>
+                  )}
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+      </Form>
+      <Space
+        className="dashboard-eval-heading dashboard-eval-create-footer"
+        style={{ justifyContent: 'flex-end' }}
+      >
+        {step > 0 && (
+          <Button onClick={() => setStep((current) => current - 1)} disabled={busy || starting}>
+            上一步
+          </Button>
+        )}
+        {step < 2 ? (
+          <Button
+            type="primary"
+            aria-label="下一步"
+            loading={busy}
+            onClick={() => void inspect(true)}
+          >
+            下一步
+          </Button>
+        ) : (
+          <Button
+            type="primary"
+            icon={<ExperimentOutlined />}
+            loading={starting}
+            disabled={!preview || preview.blockedReasons.length > 0 || busy}
+            onClick={() => void start()}
+          >
+            开始评估
+          </Button>
+        )}
+      </Space>
+      <Drawer
+        open={!!task}
+        onClose={() => setTask(null)}
+        title={task?.name ?? '用例预览'}
+        width={720}
+        rootClassName="dashboard-eval-drawer"
+      >
+        <div className="dashboard-eval-stack">
+          <EvalSection title="输入 / 指令">
+            <pre className="dashboard-eval-reading">
+              {task?.instruction ?? '由固定用例模板提供'}
+            </pre>
+          </EvalSection>
+          <EvalSection title="判定标准">
+            <pre className="dashboard-eval-reading dashboard-eval-pre">
+              {task?.expected
+                ? JSON.stringify(task.expected, null, 2)
+                : '由固定验证器提供，运行后展示具体检查项'}
+            </pre>
+          </EvalSection>
+        </div>
+      </Drawer>
+    </div>
+  );
+}

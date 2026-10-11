@@ -327,7 +327,7 @@ describe('dashboard web source contracts', () => {
     expect(inspector?.[0]).toContain('同时参与文档检索');
   });
 
-  it('opens centralized plugin settings from the bottom of the sidebar', async () => {
+  it('opens centralized project and Eval settings from the bottom of the sidebar', async () => {
     const [source, modal, styles] = await Promise.all([
       readDashboardSource(),
       readDashboardModalSource(),
@@ -370,7 +370,8 @@ describe('dashboard web source contracts', () => {
     expect(source).toContain('aria-label="设置分类"');
     expect(source).toContain("label: '项目知识'");
     expect(source).toContain("label: 'Comet 配置'");
-    expect(source).toContain('统一管理个人记忆、项目知识与工作流配置');
+    expect(source).toContain("{ key: 'comet.eval'");
+    expect(source).toContain('<EvalSettings readOnly={evalReadOnly} onSaved={onEvalSaved} />');
     expect(source).not.toContain('dashboard-settings-modal-icon');
     expect(source).toContain('个人记忆存储方式');
     expect(source).toContain('tokenConfigured');
