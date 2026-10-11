@@ -22,6 +22,7 @@ import {
 } from '../../../domains/comet-native/native-portable-migration-runtime.js';
 import { createNativePortableChange } from '../../../domains/comet-native/native-portable-runtime.js';
 import type { NativeProjectPaths } from '../../../domains/comet-native/native-types.js';
+import { requireFileSymlink } from '../../helpers/file-symlink.js';
 import { writeNativeWorkspaceIdentity } from '../../../domains/comet-native/native-workspace.js';
 
 describe('Native portable migration Runtime', () => {
@@ -108,9 +109,10 @@ describe('Native portable migration Runtime', () => {
     expect(await fs.readFile(legacyRuntime)).toEqual(fenceBefore);
   });
 
-  it.each(['invalid-json', 'unknown-schema', 'different-change', 'symlink'] as const)(
+  it.for(['invalid-json', 'unknown-schema', 'different-change', 'symlink'] as const)(
     'refuses migration cleanup with %s local state and preserves all evidence',
-    async (caseName) => {
+    async (caseName, context) => {
+      if (caseName === 'symlink') await requireFileSymlink(context);
       const { paths, localRuntime, legacyRuntime } = await migratedPortableChange();
       const stateFile = path.join(localRuntime, 'state.json');
       const value = JSON.parse(await fs.readFile(stateFile, 'utf8'));

@@ -4583,7 +4583,7 @@ describe('comet scripts', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(phase.stdout.trim()).toBe('archive');
     expect(verifyResult.stdout.trim()).toBe('pass');
-  }, 20_000);
+  });
 
   it('rejects invalid transition from the wrong phase', async () => {
     await createChange(

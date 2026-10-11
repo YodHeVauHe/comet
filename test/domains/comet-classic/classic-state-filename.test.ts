@@ -9,6 +9,7 @@ import { createClassicSdkStateStore } from '../../../domains/comet-classic/class
 import { createFileRuntimeStore, type WorkflowRun } from '../../../domains/engine/runtime.js';
 import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { prepareClassicLegacyProject } from '../../helpers/classic-project.js';
+import { requireFileSymlink } from '../../helpers/file-symlink.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -83,9 +84,10 @@ describe('Classic state filename compatibility', () => {
     },
   );
 
-  it.each(['file', 'dangling-symlink'] as const)(
+  it.for(['file', 'dangling-symlink'] as const)(
     'rejects two names with %s before CLI or SDK writes',
-    async (kind) => {
+    async (kind, context) => {
+      if (kind === 'dangling-symlink') await requireFileSymlink(context);
       const f = await fixture();
       const store = createClassicSdkStateStore(f.root);
       const run = (await store.read('demo'))!;
@@ -122,7 +124,8 @@ describe('Classic state filename compatibility', () => {
     },
   );
 
-  it('rejects a lone symbolic state file before establishing runtime storage', async () => {
+  it('rejects a lone symbolic state file before establishing runtime storage', async (context) => {
+    await requireFileSymlink(context);
     const f = await fixture();
     const outside = path.join(f.root, 'saved-state.yaml');
     await fs.rename(f.modern, outside);

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileRuntimeStore } from '../../../domains/engine/runtime-store.js';
 import { hashRuntimeValue } from '../../../domains/engine/runtime-json.js';
 import { atomicWriteContainedText } from '../../../domains/workflow-contract/contained-atomic-write.js';
+import { requireFileSymlink } from '../../helpers/file-symlink.js';
 
 interface RecordValue {
   runId: string;
@@ -469,9 +470,10 @@ describe('file RuntimeStore compaction and migration', () => {
     },
   );
 
-  it.each(['namespace', 'run', 'checkpoint', 'fence', 'staged'])(
+  it.for(['namespace', 'run', 'checkpoint', 'fence', 'staged'])(
     'rejects a symlink replacing the compact %s path without touching its target',
-    async (target) => {
+    async (target, context) => {
+      if (target === 'checkpoint' || target === 'fence') await requireFileSymlink(context);
       await store().compareAndSwap(runId, null, record(1));
       const outside = path.join(rootDir, 'outside');
       await fs.mkdir(outside);

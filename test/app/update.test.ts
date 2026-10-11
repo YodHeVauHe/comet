@@ -1886,7 +1886,19 @@ describe('update command helpers', () => {
       const npmArgs = call[1]?.slice(1) ?? [];
       return npmArgs[0] === 'install' && !npmArgs.includes('--prefix');
     });
-    expect(mockedSpawn).toHaveBeenCalledTimes(6);
+    // 进程身份探测也会调用 spawn；只核对本用例承诺的包安装行为。
+    const npmInstalls = mockedSpawn.mock.calls.filter(
+      (call) =>
+        path.basename(String(call[1]?.[0])).toLowerCase() === 'npm-cli.js' &&
+        call[1]?.[1] === 'install',
+    );
+    expect(npmInstalls).toHaveLength(2);
+    const candidateInstalls = npmInstalls.filter((call) => call[1]?.includes('--prefix'));
+    expect(candidateInstalls).toHaveLength(1);
+    const candidateArgs = candidateInstalls[0][1]!;
+    expect([projectA, projectB]).not.toContain(
+      candidateArgs[candidateArgs.indexOf('--prefix') + 1],
+    );
     expect(installCalls).toHaveLength(1);
     expect(installCalls[0][1]?.slice(1)).toEqual([
       'install',

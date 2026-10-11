@@ -70,10 +70,11 @@ describe('workspace runtime identity', () => {
     expect((await fs.stat(path.join(worktree, '.git'))).isFile()).toBe(true);
   });
 
-  it('does not lowercase case-sensitive workspace paths', async () => {
+  it('does not lowercase case-sensitive workspace paths', async (context) => {
     const other = path.join(temporary, 'Project');
-    await fs.mkdir(other);
-    if ((await fs.realpath(other)) === (await fs.realpath(project))) return;
+    await fs.mkdir(other, { recursive: true });
+    if ((await fs.realpath(other)) === (await fs.realpath(project)))
+      context.skip('当前文件系统不区分路径大小写');
     expect(resolveWorkspaceRuntimeRootSync(other)).not.toBe(
       resolveWorkspaceRuntimeRootSync(project),
     );

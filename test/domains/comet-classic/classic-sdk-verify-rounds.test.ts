@@ -18,6 +18,7 @@ import { inspectClassicSdkRun } from '../../../domains/comet-classic/classic-sdk
 import { classicVerificationReportReceipt } from '../../../domains/comet-classic/classic-verification-report.js';
 import { prepareClassicLegacyProject } from '../../helpers/classic-project.js';
 import { runtimeDispatchCommand } from '../../../app/commands/runtime.js';
+import { requireFileSymlink } from '../../helpers/file-symlink.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -491,7 +492,7 @@ describe('Classic SDK interrupted check recovery', () => {
 });
 
 describe('Classic SDK original execution receipts', () => {
-  it('uses only a matching committed portable check when the local log is missing', async () => {
+  async function portableCheck() {
     const f = await fixture('tweak', false);
     await f.cli('state', 'complete-build', 'example');
     const { runtime, run } = await f.inspect();
@@ -519,15 +520,27 @@ describe('Classic SDK original execution receipts', () => {
         output.contentHash,
         'Portable check log',
       );
+    return { f, checked, action, output, local, stateFile, original, validate };
+  }
+
+  it('rejects a symbolic link replacing the local check log', async (context) => {
+    await requireFileSymlink(context);
+    const { local, stateFile, validate } = await portableCheck();
+    await fs.unlink(local);
+    await fs.symlink(stateFile, local);
+    await expect(validate()).rejects.toThrow();
+    expect((await fs.lstat(local)).isSymbolicLink()).toBe(true);
+  });
+
+  it('uses only a matching committed portable check when the local log is missing', async () => {
+    const { f, checked, action, output, local, stateFile, original, validate } =
+      await portableCheck();
     await fs.writeFile(local, 'tampered log');
     await expect(validate()).rejects.toThrow('changed');
     await fs.unlink(local);
     await fs.mkdir(local);
     await expect(validate()).rejects.toThrow('real file');
     await fs.rmdir(local);
-    await fs.symlink(stateFile, local);
-    await expect(validate()).rejects.toThrow();
-    await fs.unlink(local);
     await expect(validate()).resolves.toBe(output.contentHash);
     for (const mutation of ['hash', 'claim', 'future', 'marker'] as const) {
       const document = parse(original);

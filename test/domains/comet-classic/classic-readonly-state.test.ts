@@ -1,4 +1,5 @@
 import { readCheckIndex } from '../../../domains/comet-classic/classic-check-index.js';
+import { requireFileSymlink } from '../../helpers/file-symlink.js';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -168,7 +169,8 @@ describe('Classic read-only state and Archive identity', () => {
     );
   });
 
-  it('rejects a symbolic link at an absolute home read target', async () => {
+  it('rejects a symbolic link at an absolute home read target', async (context) => {
+    await requireFileSymlink(context);
     const runtime = await workspaceRuntime.resolveWorkspaceRuntimeRoot(root);
     const outside = path.join(directory, 'outside.json');
     await fs.writeFile(outside, 'untouched');

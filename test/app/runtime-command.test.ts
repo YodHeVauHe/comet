@@ -1,5 +1,6 @@
 import { resolveWorkspaceRuntimeRootSync } from '../../domains/workflow-contract/workspace-runtime.js';
 import { fixtureAcceptanceReview } from '../helpers/native-builder-acceptance-review.js';
+import { requireFileSymlink } from '../helpers/file-symlink.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -1318,14 +1319,15 @@ describe('Runtime JSON command', () => {
     },
   );
 
-  it.each(
+  it.for(
     ['openspec', 'docs/openspec'].flatMap((base) =>
       ['double-file', 'double-dangling-symlink', 'single-symlink'].map((kind) => ({
         base,
         kind,
       })),
     ),
-  )('rejects Classic $base $kind before raw start writes', async ({ base, kind }) => {
+  )('rejects Classic $base $kind before raw start writes', async ({ base, kind }, context) => {
+    if (kind !== 'double-file') await requireFileSymlink(context);
     const changeDirRef = `${base}/changes/classic-change`;
     const directory = path.join(projectRoot, changeDirRef);
     const modern = path.join(directory, 'comet-state.yaml');

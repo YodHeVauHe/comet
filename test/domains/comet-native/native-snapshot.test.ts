@@ -1144,7 +1144,7 @@ describe('Native VCS-independent content snapshots', () => {
         renameAfterWindowsProcessRelease(projectRoot, movedRoot),
       ).resolves.toBeUndefined();
       projectRoot = movedRoot;
-      paths = await nativeProjectPaths(projectRoot, '.');
+      // 仅更新清理目标；故意损坏的 Git 元数据不能用于重新解析 Runtime 路径。
     },
   );
 
