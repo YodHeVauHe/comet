@@ -728,6 +728,19 @@ export function EvalPanel({
       )
     : [];
   const defaultReference = detail?.boundBaselineRunId || detail?.baselineRunId;
+  const otherBaselines = detail
+    ? runs.filter(
+        (run) =>
+          run.id !== detail.id &&
+          run.isBaseline &&
+          run.baselineEligible &&
+          !candidates.some((candidate) => candidate.id === run.id),
+      )
+    : [];
+  const referenceOption = (run) => ({
+    value: run.id,
+    label: `${run.target.name} · ${run.target.version ?? '—'} · ${run.id}`,
+  });
   return (
     <section className="dashboard-eval-page" aria-label={t('Eval 工作台')}>
       <EvalGuideDrawer
@@ -791,17 +804,38 @@ export function EvalPanel({
           </Button>
           <Title level={3}>{t('与基线对比')}</Title>
           <Text type="secondary">{t('临时参照只影响当前查看，不修改默认基线。')}</Text>
+          {candidates.length === 0 && !comparison && (
+            <Alert
+              type="info"
+              showIcon
+              message={t('当前评估没有匹配的对比参照')}
+              description={t(
+                '已保存的基线不一定适用于本次评估。只有目标、固定用例和评分规则一致时，才能判定进步或退步；其他基线可以并列查看。需要可比结果时，请使用与基线相同的固定用例和评分规则重新评估。',
+              )}
+            />
+          )}
           <Select
             aria-label={t('临时参照')}
+            placeholder={t('选择对比参照或其他基线')}
             value={baselineId ?? undefined}
-            options={candidates.map((run) => ({
-              value: run.id,
-              label: `${run.target.name} · ${run.target.version ?? '—'} · ${run.id}`,
-            }))}
+            options={[
+              ...(candidates.length
+                ? [{ label: t('可比参照'), options: candidates.map(referenceOption) }]
+                : []),
+              ...(otherBaselines.length
+                ? [
+                    {
+                      label: t('其他基线 · 仅并列查看'),
+                      options: otherBaselines.map(referenceOption),
+                    },
+                  ]
+                : []),
+            ]}
+            notFoundContent={t('没有其他有效基线；可先将完整评估设为基线')}
             onChange={(id) => void compare(id)}
             loading={busy}
           />
-          <EvalComparison value={comparison} />
+          {comparison && <EvalComparison value={comparison} />}
         </div>
       ) : (
         <div className="dashboard-eval-stack dashboard-eval-detail">

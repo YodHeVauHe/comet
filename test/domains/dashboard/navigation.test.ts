@@ -61,4 +61,24 @@ describe('Dashboard navigation without URL suffixes', () => {
       projectId: null,
     });
   });
+  it('falls back from the former update route without saving a confirmation or command', () => {
+    const page = browser();
+    navigateDashboard(
+      {
+        view: 'update',
+        projectId: 'project',
+        confirmed: true,
+        version: '0.5.1',
+        command: 'never-replay',
+      },
+      {},
+      page,
+    );
+    expect(readDashboardNavigation(page)).toEqual({
+      view: 'workflow',
+      workflow: null,
+      projectId: 'project',
+    });
+    expect(page.location.search).toBe('');
+  });
 });

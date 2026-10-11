@@ -858,49 +858,76 @@ export function EvalComparison({ value }) {
           detail={value.comparable ? t('进步 / 退步') : undefined}
         />
       </div>
-      <EvalSection title={t('逐项对比')} description={t('同一固定用例的基线结果与本次结果。')}>
-        <Table
-          size="small"
-          rowKey={(item) => `${item.task}-${item.repetition}`}
-          pagination={false}
-          dataSource={value.cases}
-          columns={[
-            { title: t('用例'), dataIndex: 'task' },
-            {
-              title: t('基线'),
-              dataIndex: 'baseline',
-              render: (item) =>
-                typeof item === 'boolean' ? <CaseStatus item={{ passed: item }} /> : '—',
-            },
-            {
-              title: t('本次'),
-              dataIndex: 'candidate',
-              render: (item) =>
-                typeof item === 'boolean' ? <CaseStatus item={{ passed: item }} /> : '—',
-            },
-            {
-              title: t('变化'),
-              dataIndex: 'change',
-              render: (item) => (
-                <Tag
-                  color={
-                    item === 'improved' ? 'success' : item === 'regressed' ? 'error' : 'default'
-                  }
-                >
-                  {
+      {value.comparable ? (
+        <EvalSection title={t('逐项对比')} description={t('同一固定用例的基线结果与本次结果。')}>
+          <Table
+            size="small"
+            rowKey={(item) => `${item.task}-${item.repetition}`}
+            pagination={false}
+            dataSource={value.cases}
+            columns={[
+              { title: t('用例'), dataIndex: 'task' },
+              {
+                title: t('基线'),
+                dataIndex: 'baseline',
+                render: (item) =>
+                  typeof item === 'boolean' ? <CaseStatus item={{ passed: item }} /> : '—',
+              },
+              {
+                title: t('本次'),
+                dataIndex: 'candidate',
+                render: (item) =>
+                  typeof item === 'boolean' ? <CaseStatus item={{ passed: item }} /> : '—',
+              },
+              {
+                title: t('变化'),
+                dataIndex: 'change',
+                render: (item) => (
+                  <Tag
+                    color={
+                      item === 'improved' ? 'success' : item === 'regressed' ? 'error' : 'default'
+                    }
+                  >
                     {
-                      improved: t('进步'),
-                      regressed: t('退步'),
-                      unchanged: t('持平'),
-                      unmatched: t('未配对'),
-                    }[item]
-                  }
-                </Tag>
-              ),
-            },
-          ]}
-        />
-      </EvalSection>
+                      {
+                        improved: t('进步'),
+                        regressed: t('退步'),
+                        unchanged: t('持平'),
+                        unmatched: t('未配对'),
+                      }[item]
+                    }
+                  </Tag>
+                ),
+              },
+            ]}
+          />
+        </EvalSection>
+      ) : (
+        <div className="dashboard-eval-detail-grid">
+          {[
+            [t('基线用例'), value.baseline],
+            [t('本次用例'), value.candidate],
+          ].map(([title, run]) => (
+            <Card key={run.id} title={title} size="small">
+              <Text>{run.target.name}</Text>
+              <Table
+                size="small"
+                rowKey="id"
+                pagination={false}
+                dataSource={run.cases}
+                columns={[
+                  { title: t('用例'), dataIndex: 'task' },
+                  {
+                    title: t('状态'),
+                    key: 'status',
+                    render: (_, item) => <CaseStatus item={item} />,
+                  },
+                ]}
+              />
+            </Card>
+          ))}
+        </div>
+      )}
       {value.configurationChanges.length > 0 && (
         <EvalSection
           title={t('配置差异')}

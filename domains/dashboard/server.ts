@@ -35,6 +35,7 @@ import {
   evalEnvironmentChecks,
 } from '../eval/index.js';
 import { EvalRunError } from '../eval/index.js';
+import { createDashboardUpdateService, DashboardUpdateError } from './update-service.js';
 
 export interface DashboardServerOptions {
   projectPath: string;
@@ -122,36 +123,43 @@ export async function startDashboardServer(
   const requestedPort = options.port ?? DEFAULT_PORT;
   const port = requestedPort === 0 ? 0 : await findAvailablePort(requestedPort);
   const pluginHostAccess = createDashboardPluginHostAccess(options.pluginHost);
+  const updates = createDashboardUpdateService(options.projectPath);
   const currentProjectPath = await fs
     .realpath(options.projectPath)
     .catch(() => path.resolve(options.projectPath));
 
   const server = http.createServer((req, res) => {
-    handleRequest(req, res, currentProjectPath, webRoot, pluginHostAccess).catch((error) => {
-      if (error instanceof EvalRunError) {
-        respondJson(res, req.method ?? 'GET', error.statusCode, { error: error.message });
-        return;
-      }
-      if (
-        error instanceof DashboardChangeQueryError ||
-        error instanceof NativeDashboardQueryError
-      ) {
-        respondJson(res, req.method ?? 'GET', 400, { error: error.message });
-        return;
-      }
-      if (error instanceof DashboardPluginHostError) {
-        respondJson(res, req.method ?? 'GET', error.statusCode, {
-          error: error.message,
-          ...(error.pluginId ? { pluginId: error.pluginId } : {}),
-        });
-        return;
-      }
-      if (error instanceof DashboardProjectConfigError) {
-        respondJson(res, req.method ?? 'GET', error.statusCode, { error: error.message });
-        return;
-      }
-      respondError(res, 500, `Internal server error: ${(error as Error).message}`);
-    });
+    handleRequest(req, res, currentProjectPath, webRoot, pluginHostAccess, updates).catch(
+      (error) => {
+        if (error instanceof DashboardUpdateError) {
+          respondJson(res, req.method ?? 'GET', error.statusCode, { error: error.message });
+          return;
+        }
+        if (error instanceof EvalRunError) {
+          respondJson(res, req.method ?? 'GET', error.statusCode, { error: error.message });
+          return;
+        }
+        if (
+          error instanceof DashboardChangeQueryError ||
+          error instanceof NativeDashboardQueryError
+        ) {
+          respondJson(res, req.method ?? 'GET', 400, { error: error.message });
+          return;
+        }
+        if (error instanceof DashboardPluginHostError) {
+          respondJson(res, req.method ?? 'GET', error.statusCode, {
+            error: error.message,
+            ...(error.pluginId ? { pluginId: error.pluginId } : {}),
+          });
+          return;
+        }
+        if (error instanceof DashboardProjectConfigError) {
+          respondJson(res, req.method ?? 'GET', error.statusCode, { error: error.message });
+          return;
+        }
+        respondError(res, 500, `Internal server error: ${(error as Error).message}`);
+      },
+    );
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -181,6 +189,7 @@ async function handleRequest(
   projectPath: string,
   webRoot: string,
   pluginHostAccess?: DashboardPluginHostAccess,
+  updates?: ReturnType<typeof createDashboardUpdateService>,
 ): Promise<void> {
   const authority = req.headers.host;
   const localPort = req.socket.localPort;
@@ -220,18 +229,38 @@ async function handleRequest(
   const isEvalSettingsRequest = /^\/api\/dashboard\/eval\/settings(?:\/check)?$/u.test(pathname);
   const isEvalRequest =
     isEvalSettingsRequest || /^\/api\/dashboard\/projects\/[^/]+\/eval(?:\/|$)/u.test(pathname);
+  const isUpdateRequest = pathname === '/api/dashboard/update';
   if (
     req.method !== 'GET' &&
     req.method !== 'HEAD' &&
     !(
       req.method === 'POST' &&
-      (isPluginRequest || isProjectConfigRequest || isProjectForgetRequest || isEvalRequest)
+      (isPluginRequest ||
+        isProjectConfigRequest ||
+        isProjectForgetRequest ||
+        isEvalRequest ||
+        isUpdateRequest)
     )
   ) {
     respondError(res, 405, 'Method not allowed');
     return;
   }
 
+  if (isUpdateRequest && updates) {
+    const result =
+      req.method === 'POST'
+        ? await updates.start(await readJsonBody(req))
+        : await updates.status(url.searchParams.get('refresh') === '1');
+    respondJson(res, req.method, req.method === 'POST' ? 202 : 200, result);
+    return;
+  }
+  if (pathname === '/api/dashboard/update/job' && updates) {
+    const after = Number(url.searchParams.get('after') ?? 0);
+    if (!Number.isSafeInteger(after) || after < 0)
+      throw new DashboardUpdateError('无效的日志位置', 400);
+    respondJson(res, req.method, 200, updates.readJob(after));
+    return;
+  }
   if (isEvalSettingsRequest) {
     if (pathname.endsWith('/check')) {
       const { defaults } = await readUserEvalSettings();

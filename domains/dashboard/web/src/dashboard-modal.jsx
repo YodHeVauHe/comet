@@ -2,7 +2,7 @@ import { t } from './dashboard-i18n.js';
 import { useDashboardLanguage } from './dashboard-language.jsx';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Button, Modal, Tooltip } from 'antd';
-import { FullscreenExitOutlined, FullscreenOutlined } from '@ant-design/icons';
+import { CloseOutlined, FullscreenExitOutlined, FullscreenOutlined } from '@ant-design/icons';
 
 const DashboardPortalContext = createContext(null);
 
@@ -43,7 +43,16 @@ export function useDashboardModalState(open) {
   return { fullscreen, toggleFullscreen, requestClose };
 }
 
-function DashboardModalTitle({ title, subtitle, description, fullscreen, onToggleFullscreen }) {
+function DashboardModalTitle({
+  title,
+  subtitle,
+  description,
+  fullscreen,
+  onToggleFullscreen,
+  showFullscreen,
+  showCloseButton,
+  onClose,
+}) {
   useDashboardLanguage();
   return (
     <div className="dashboard-modal-title dashboard-settings-modal-title">
@@ -56,16 +65,34 @@ function DashboardModalTitle({ title, subtitle, description, fullscreen, onToggl
           {description && <p>{description}</p>}
         </div>
       </div>
-      <Tooltip title={fullscreen ? t('退出全屏') : t('全屏展示')} placement="bottom">
+      {showFullscreen && (
+        <Tooltip title={fullscreen ? t('退出全屏') : t('全屏展示')} placement="bottom">
+          <Button
+            className="dashboard-modal-expand dashboard-settings-modal-expand"
+            type="text"
+            icon={fullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+            aria-label={fullscreen ? t('退出全屏') : t('全屏展示')}
+            aria-pressed={fullscreen}
+            onClick={onToggleFullscreen}
+            onKeyDown={(event) => {
+              if (fullscreen && event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                onClose();
+              }
+            }}
+          />
+        </Tooltip>
+      )}
+      {showCloseButton && (
         <Button
-          className="dashboard-modal-expand dashboard-settings-modal-expand"
+          className="dashboard-modal-expand dashboard-modal-close"
           type="text"
-          icon={fullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
-          aria-label={fullscreen ? t('退出全屏') : t('全屏展示')}
-          aria-pressed={fullscreen}
-          onClick={onToggleFullscreen}
+          icon={<CloseOutlined />}
+          aria-label={t('关闭窗口')}
+          onClick={onClose}
         />
-      </Tooltip>
+      )}
     </div>
   );
 }
@@ -81,6 +108,8 @@ export function DashboardModal({
   rootClassName = '',
   footer,
   onClose,
+  showFullscreen = true,
+  showCloseButton = false,
   children,
   ...modalProps
 }) {
@@ -120,6 +149,9 @@ export function DashboardModal({
           description={description}
           fullscreen={fullscreen}
           onToggleFullscreen={toggleFullscreen}
+          showFullscreen={showFullscreen}
+          showCloseButton={showCloseButton}
+          onClose={() => requestClose(onClose)}
         />
       }
       footer={footer}

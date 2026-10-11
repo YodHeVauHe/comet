@@ -877,6 +877,125 @@ test.describe('Dashboard Eval', () => {
     await expect(page.getByLabel('执行模型', { exact: true })).toHaveValue('run-only-model');
     expect(saves).toBe(2);
   });
+  for (const language of ['zh', 'en']) {
+    test(`shows saved baselines from other scopes for side-by-side viewing (${language})`, async ({
+      page,
+    }) => {
+      const candidate = { ...run, baselineScope: 'new-workflow' };
+      const references = ['eval-old-native', 'eval-old-classic'].map((id) => ({
+        ...run,
+        id,
+        baselineScope: id,
+        isBaseline: true,
+        target: { ...run.target, name: id },
+        cases: [{ ...run.cases[0], task: id }],
+      }));
+      let writes = 0;
+      await page.route('**/eval/runs', (route) =>
+        route.fulfill({ json: { items: [candidate, ...references] } }),
+      );
+      await page.route('**/eval/runs/eval-one', (route) => route.fulfill({ json: candidate }));
+      await page.route('**/eval/runs/*/baseline', (route) => {
+        writes++;
+        return route.abort();
+      });
+      await page.route(/\/eval\/runs\/eval-one\/compare\?/, (route) => {
+        const id = new URL(route.request().url()).searchParams.get('baseline');
+        return route.fulfill({
+          json: {
+            comparable: false,
+            reasons: ['目标、固定用例或评分规则不一致'],
+            baseline: references.find((item) => item.id === id),
+            candidate,
+            improved: 0,
+            regressed: 0,
+            unchanged: 0,
+            configurationChanges: [],
+            // 即使旧响应包含变化标签，不可比记录也不能显示进步或退步。
+            cases: [
+              {
+                task: 'clarify',
+                repetition: 1,
+                baseline: true,
+                candidate: false,
+                change: 'regressed',
+              },
+            ],
+          },
+        });
+      });
+      await page.reload();
+      if (language === 'en')
+        await page.locator('.comet-language-switch').getByText('EN', { exact: true }).click();
+      await page.getByRole('button', { name: 'writer', exact: true }).first().click();
+      await page
+        .getByRole('button', {
+          name: language === 'en' ? 'Compare with baseline' : '与基线对比',
+          exact: true,
+        })
+        .click();
+      await expect(
+        page.getByText(
+          language === 'en'
+            ? 'No matching reference for this evaluation'
+            : '当前评估没有匹配的对比参照',
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await page.getByLabel(language === 'en' ? 'Temporary reference' : '临时参照').click();
+      await expect(
+        page.getByText(
+          language === 'en' ? 'Other baselines · Side-by-side only' : '其他基线 · 仅并列查看',
+          { exact: true },
+        ),
+      ).toBeVisible();
+      for (const reference of references)
+        await expect(
+          page.getByText(`${reference.target.name} · 0.5.0 · ${reference.id}`, { exact: true }),
+        ).toBeVisible();
+      await page.getByText('eval-old-native · 0.5.0 · eval-old-native', { exact: true }).click();
+      await expect(
+        page.getByText(language === 'en' ? 'Side-by-side only' : '仅并列查看', { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(language === 'en' ? 'Baseline cases' : '基线用例', { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(language === 'en' ? 'Current cases' : '本次用例', { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.locator('.dashboard-eval-page .ant-tag').filter({ hasText: /^(退步|Regressed)$/ }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByText(language === 'en' ? 'Case comparison' : '逐项对比', { exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByText(
+          language === 'en'
+            ? 'No matching reference for this evaluation'
+            : '当前评估没有匹配的对比参照',
+          { exact: true },
+        ),
+      ).toHaveCount(0);
+      await page.screenshot({
+        path: test.info().outputPath('incompatible-baselines-desktop.png'),
+        fullPage: true,
+        animations: 'disabled',
+      });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect
+        .poll(() =>
+          page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+        )
+        .toBe(true);
+      await page.screenshot({
+        path: test.info().outputPath('incompatible-baselines.png'),
+        fullPage: true,
+        animations: 'disabled',
+      });
+      expect(writes).toBe(0);
+    });
+  }
   test('switches temporary comparison references without replacing the default baseline', async ({
     page,
   }) => {

@@ -31,6 +31,13 @@ http://localhost:4399/
 已有的 `?view=eval&project=...&run=...` 链接仍可打开，加载后会清理这些参数。
 复制根地址到新标签页会打开默认工作区，不会指定某个评估运行。
 
+侧栏「系统」右侧显示当前 Dashboard 使用的 Comet 版本。检测到 npm 新版本时显示 `new`，
+点击后在设置风格的遮罩弹窗中查看目标版本和项目索引中的全部更新对象；确认后执行
+`comet update --all-projects --yes --target-version <version>`。页面持续显示命令行输出，
+右上角关闭窗口不会中断更新，重新打开可继续查看日志，刷新不会重复执行更新。
+失败时可查看退出码并明确重试；更新完成后重新启动
+Dashboard 使用新版本。日志保留在当前 Dashboard 进程中，不跨进程保存。
+
 ## Eval
 
 在侧栏打开「评估 Eval」，查看当前项目的 CLI 和 Dashboard 评估记录，或选择本地

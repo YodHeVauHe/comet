@@ -1808,6 +1808,58 @@ describe('update command helpers', () => {
     expect(registry.projects.every((project) => project.lastSource === 'update')).toBe(true);
   });
 
+  it('runs confirmed all-project updates with human-readable logs and no further prompts', async () => {
+    const home = path.join(tmpDir, 'confirmed-update-home');
+    const projects = [path.join(tmpDir, 'confirmed-a'), path.join(tmpDir, 'confirmed-b')];
+    for (const project of projects) {
+      const skill = path.join(project, '.claude', 'skills', 'comet');
+      await fs.mkdir(skill, { recursive: true });
+      await fs.writeFile(path.join(skill, 'SKILL.md'), '# Comet');
+      await upsertProjectInstallation(project, [{ platform: 'claude', language: 'en' }], 'init', {
+        homeDir: home,
+      });
+    }
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    mockedSelect.mockClear();
+    try {
+      expect(
+        await updateCommand(projects[0], { allProjects: true, yes: true, skipSelfUpdate: true }),
+      ).toEqual({ status: 'complete' });
+      const output = log.mock.calls.map((call) => call.join(' ')).join('\n');
+      expect(output).toContain('Updated 2 indexed project(s).');
+      for (const project of projects) expect(output).toContain(project);
+      expect(mockedSelect).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      homedir.mockRestore();
+    }
+  });
+  it('pins an approved npm version even when latest changes before installation', async () => {
+    const skill = path.join(tmpDir, '.claude', 'skills', 'comet');
+    await fs.mkdir(skill, { recursive: true });
+    await fs.writeFile(path.join(skill, 'SKILL.md'), '# Comet');
+    mockedGetLatestVersion.mockResolvedValue('0.4.0-beta.9');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      await updateCommand(tmpDir, {
+        currentProject: true,
+        json: true,
+        targetVersion: '0.4.0-beta.8',
+      });
+      const result = JSON.parse(log.mock.calls.map((call) => call.join(' ')).join('\n'));
+      expect(result.npm).toMatchObject({
+        status: 'updated',
+        command: 'npm install -g @rpamis/comet@0.4.0-beta.8 --registry https://registry.npmjs.org',
+      });
+      expect(mockedGetLatestVersion).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
+    await expect(updateCommand(tmpDir, { targetVersion: 'latest;echo invalid' })).rejects.toThrow(
+      '--target-version',
+    );
+  });
   it('does not run local npm installs for all-projects entries without project package dependencies', async () => {
     const fakeHome = path.join(tmpDir, 'fake-home-global-npm-once');
     const projectA = path.join(tmpDir, 'project-a-global-package');

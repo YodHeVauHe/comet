@@ -474,6 +474,15 @@ describe('CLI lazy command actions', () => {
     await runAction(['dashboard', 'project', '--port', '0'], dashboardCommand);
     await runAction(['doctor', 'project'], doctorCommand);
     await runAction(['update', 'project'], updateCommand);
+    updateCommand.mockClear();
+    await runAction(
+      ['update', 'project', '--all-projects', '--yes', '--target-version', '0.5.1'],
+      updateCommand,
+    );
+    expect(updateCommand).toHaveBeenCalledWith(
+      'project',
+      expect.objectContaining({ allProjects: true, yes: true, targetVersion: '0.5.1' }),
+    );
     await runAction(['uninstall', 'project', '--force'], uninstallCommand);
     await runAction(['eval'], evalCommand);
     await runAction(['state', 'show'], runClassicFacade);

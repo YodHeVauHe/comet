@@ -498,6 +498,11 @@ program
 program
   .command('update [path]')
   .description('Update Comet and its installed Skills, Rules, and Hooks')
+  .option(
+    '--yes',
+    'Confirm indexed project updates, use copy mode, and skip optional new integrations',
+  )
+  .option('--target-version <version>', 'Update to this exact Comet version without downgrading')
   .option('--json', 'Output as JSON')
   .option('--platform <platform>', 'Platform target to update')
   .addOption(new Option('--language <lang>', 'Language for skills').choices(['en', 'zh']))

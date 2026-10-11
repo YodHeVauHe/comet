@@ -83,6 +83,7 @@ import {
 import { NativeWorkflowPanel } from './native-workflow-panel.jsx';
 import { EvalPanel } from './eval-panel.jsx';
 import { EvalSettings } from './eval-settings.jsx';
+import { DashboardVersion, DashboardUpdateModal, useDashboardUpdate } from './dashboard-update.jsx';
 import { WorkflowPhaseTrack } from './phase-progress-indicator.jsx';
 import {
   classicChangeStatusPresentation,
@@ -505,6 +506,8 @@ function DashboardApp({
   const dashboardLanguage = useDashboardLanguage();
   const navigation = useDashboardNavigation({ embedded });
   const useDemo = forceDemo || new URLSearchParams(window.location.search).has('demo');
+  const cometUpdate = useDashboardUpdate(!embedded && !useDemo);
+  const [updateOpen, setUpdateOpen] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [workflow, setWorkflow] = useState(() => (useDemo ? 'classic' : null));
@@ -1528,6 +1531,11 @@ function DashboardApp({
     >
       <AntSidebar
         embedded={embedded}
+        update={useDemo ? null : cometUpdate}
+        onUpdateSelect={() => {
+          setSettingsOpen(false);
+          setUpdateOpen(true);
+        }}
         open={railOpen}
         collapsed={sidebarCollapsed}
         workflow={workflow}
@@ -1761,6 +1769,13 @@ function DashboardApp({
             )}
           </div>
         </div>
+        {!embedded && !useDemo && (
+          <DashboardUpdateModal
+            open={updateOpen}
+            update={cometUpdate}
+            onClose={() => setUpdateOpen(false)}
+          />
+        )}
         <DashboardSettingsOverlay
           open={settingsOpen}
           readOnly={embedded}
@@ -4287,6 +4302,8 @@ const embeddedDashboardBuild = globalThis.__COMET_DASHBOARD_EMBED__ === true;
 if (dashboardRoot && !embeddedDashboardBuild) createRoot(dashboardRoot).render(<App />);
 function AntSidebar({
   embedded = false,
+  update,
+  onUpdateSelect,
   open,
   collapsed,
   workflow,
@@ -4446,10 +4463,11 @@ function AntSidebar({
           <div className="dashboard-sidebar-navigation">{navigation}</div>
           <div className="dashboard-sidebar-footer">
             <div
-              className="dashboard-sidebar-label dashboard-sidebar-footer-label"
+              className="dashboard-sidebar-label dashboard-sidebar-footer-label dashboard-system-heading"
               aria-hidden={collapsed}
             >
-              {t('系统')}
+              <span>{t('系统')}</span>
+              {!embedded && update && <DashboardVersion update={update} onClick={onUpdateSelect} />}
             </div>
             {settingsButton}
           </div>
@@ -4459,7 +4477,18 @@ function AntSidebar({
         <div className="dashboard-mobile-navigation">
           {navigation}
           <div className="dashboard-mobile-settings">
-            <div className="dashboard-sidebar-label">{t('系统')}</div>
+            <div className="dashboard-sidebar-label dashboard-system-heading">
+              <span>{t('系统')}</span>
+              {!embedded && update && (
+                <DashboardVersion
+                  update={update}
+                  onClick={() => {
+                    onUpdateSelect();
+                    onClose();
+                  }}
+                />
+              )}
+            </div>
             {settingsButton}
           </div>
         </div>
