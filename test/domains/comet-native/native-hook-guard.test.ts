@@ -403,6 +403,24 @@ describe('Native phase Hook guard', () => {
     });
   });
 
+  it('guards user-level Runtime files outside the project tree', async () => {
+    await writeProjectConfig(projectRoot, defaultProjectConfig('.'));
+    await activeChange('shape', 'home-runtime-guard');
+    const paths = await nativeProjectPaths(projectRoot, '.');
+    for (const target of [
+      path.join(paths.changesRuntimeDir, 'home-runtime-guard/state.json'),
+      path.join(paths.workspaceRuntimeRoot, 'state-projections/native/home-runtime-guard.json'),
+    ]) {
+      await expect(
+        inspectNativeHookGuard(projectRoot, writeRequest(target)),
+      ).resolves.toMatchObject({
+        allowed: false,
+        phase: 'shape',
+        reason: expect.stringContaining('Runtime-owned'),
+      });
+    }
+  });
+
   it('does not let the allowlist bypass Native Runtime-owned files', async () => {
     await writeProjectConfig(projectRoot, defaultProjectConfig('.'));
     await addHookAllowPath('.comet');

@@ -1,3 +1,5 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
+import { classicSdkCheckDirectoryRef, classicSdkCheckLogHash } from './classic-sdk-check-record.js';
 import { archivedClassicDocumentRef } from './classic-archive-annotation.js';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -283,7 +285,9 @@ async function onlyRuntimeCheckpointChanged(
   dirty: string,
   run: WorkflowRun,
 ): Promise<boolean> {
-  const stateRef = `${archiveRef}/.comet.yaml`;
+  const stateRef = path
+    .relative(root, await resolveClassicStateFile(path.join(root, archiveRef)))
+    .replaceAll('\\', '/');
   if (dirty !== `M ${stateRef}`) return false;
   const committed = execFileSync('git', ['show', `HEAD:${stateRef}`], {
     cwd: root,
@@ -1058,13 +1062,23 @@ function classicCheckEvidenceValidator(scope: 'build' | 'verify'): RuntimeEviden
                 expected: 'directory',
               });
         const logPrefix = `${change.relative.replaceAll('\\', '/')}/.comet/checks/`;
-        if (!change.exists || !cwd.exists || !ref.startsWith(logPrefix) || !ref.endsWith('.log')) {
+        if (
+          !change.exists ||
+          !cwd.exists ||
+          (!ref.startsWith(logPrefix) && !ref.startsWith(`${classicSdkCheckDirectoryRef(run)}/`)) ||
+          path.posix.normalize(ref) !== ref ||
+          !ref.endsWith('.log')
+        ) {
           return reject(`Classic ${scope} check log is outside the current change`);
         }
-        const log = await hashProtectedProjectFile(root, ref, {
-          label: `Classic ${scope} check log`,
-        });
-        if (log.digest !== contentHash) return reject(`Classic ${scope} check log changed`);
+        const logHash = await classicSdkCheckLogHash(
+          root,
+          run,
+          action,
+          ref,
+          contentHash,
+          `Classic ${scope} check log`,
+        );
         const identity = { argv: check.argv as string[], cwd: cwd.relative || '.' };
         const policy = await readCheckPolicy(root, identity);
         const environment = await checkEnvironmentFingerprint(identity.argv, cwd.target, policy);
@@ -1097,7 +1111,7 @@ function classicCheckEvidenceValidator(scope: 'build' | 'verify'): RuntimeEviden
           });
           if (!report.accepted) return reject(report.reason ?? 'Classic Verify report changed');
         }
-        return { accepted: true, actualHash: log.digest };
+        return { accepted: true, actualHash: logHash };
       } catch (error) {
         return reject(error instanceof Error ? error.message : String(error));
       }

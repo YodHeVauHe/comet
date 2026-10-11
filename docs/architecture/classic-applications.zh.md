@@ -33,7 +33,7 @@
 
 随后执行派发的 `comet-classic-composition-recovery` Action。存在正在执行或结果未知的 Action 时，命令会拒绝中断，须先核对原执行结果。断连后继续原 Action 的 ID、attempt、inputHash 和 claimToken，不自动重发工作。
 
-定制 Classic 使用 `comet runtime dispatch --application <应用身份>` 或 `--application-file <application.json>` 继续同一 Run。基础 Classic state/guard/Archive 命令会明确拒绝替代组合应用推进。`.comet.yaml` 保存可读投影、原 Application 身份及完整 portable checkpoint；本地运行记录丢失后，恢复必须加载原固定应用包，不能改用内置 Classic。
+定制 Classic 使用 `comet runtime dispatch --application <应用身份>` 或 `--application-file <application.json>` 继续同一 Run。基础 Classic state/guard/Archive 命令会明确拒绝替代组合应用推进。`comet-state.yaml` 保存可读投影、原 Application 身份及完整 portable checkpoint；历史 `.comet.yaml` 保持原地读写；本地运行记录丢失后，恢复必须加载原固定应用包，不能改用内置 Classic。
 
 ## 领域机器步骤
 

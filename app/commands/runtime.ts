@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRoot } from '../../domains/workflow-contract/workspace-runtime.js';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -642,10 +643,27 @@ export async function runtimeDispatchCommand(
     if (application !== undefined && (options.workflow?.length ?? 0) > 0) {
       invalid('--application 与 --workflow 不能同时使用');
     }
-    if (application?.startsWith('classic-') && request.operation !== 'start') {
-      const { resolveClassicSdkCommandRoot } =
-        await import('../../domains/comet-classic/classic-sdk-status.js');
-      projectRoot = await resolveClassicSdkCommandRoot(projectRoot, text(request.runId, 'runId'));
+    if (application?.startsWith('classic-')) {
+      const change = text(request.runId, 'runId');
+      const { inspectClassicStateFileCandidates } =
+        await import('../../domains/comet-classic/classic-paths.js');
+      await inspectClassicStateFileCandidates(projectRoot, change);
+      if (request.operation === 'start') {
+        await assertBuiltInChangeInput(
+          projectRoot,
+          application as SdkApplication,
+          change,
+          object(request.input, 'input'),
+        );
+      } else {
+        const { resolveClassicSdkCommandRoot } =
+          await import('../../domains/comet-classic/classic-sdk-status.js');
+        const commandRoot = await resolveClassicSdkCommandRoot(projectRoot, change);
+        if (commandRoot !== projectRoot) {
+          await inspectClassicStateFileCandidates(commandRoot, change);
+        }
+        projectRoot = commandRoot;
+      }
     }
     if (application === 'native' && request.operation !== 'start') {
       const { resolveNativeSdkCommandRoot } =
@@ -697,23 +715,24 @@ export async function runtimeDispatchCommand(
     } else if (application !== undefined) {
       invalid(`不支持的内置应用：${application}`);
     }
-    const builtInRootDir = path.join(
-      projectRoot,
-      '.comet',
-      'runtime',
-      'sdk-runs',
-      application === 'native' ? 'native' : 'classic',
-    );
+    const builtInRootDir =
+      application === undefined
+        ? undefined
+        : path.join(
+            await resolveWorkspaceRuntimeRoot(projectRoot),
+            'sdk-runs',
+            application === 'native' ? 'native' : 'classic',
+          );
     const rootDir =
       application === undefined
         ? path.resolve(invocationCwd, text(options.rootDir, '--root-dir'))
-        : builtInRootDir;
+        : builtInRootDir!;
     if (
       application !== undefined &&
       options.rootDir !== undefined &&
       path.resolve(invocationCwd, options.rootDir) !== builtInRootDir
     ) {
-      invalid('内置应用必须使用项目中对应 workflow 的 .comet/runtime/sdk-runs 目录');
+      invalid('内置应用必须使用当前工作区用户级 Runtime 中对应 workflow 的 sdk-runs 目录');
     }
     const workflows = await Promise.all(
       (options.workflow ?? []).map(

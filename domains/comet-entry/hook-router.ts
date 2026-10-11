@@ -1,3 +1,5 @@
+import { resolveWorkspaceRuntimeRootSync } from '../workflow-contract/workspace-runtime.js';
+import { normalizeCometHookTargets } from '../../platform/process/hook-adapter.js';
 import path from 'path';
 
 import {
@@ -20,7 +22,11 @@ import { memoizedHookRead } from '../../platform/process/hook-read-cache.js';
 import { readWorkflowProjectConfig } from '../workflow-contract/project-config-reader.js';
 import { readCometCurrentSelection } from './current-selection.js';
 import { readCachedProjectConfig } from './entry-reads.js';
-import { scopeCometHookTargets } from '../workflow-contract/hook-target-scope.js';
+import {
+  cometHookRuntimeTargetCandidates,
+  isCometHookTargetWithin,
+  scopeCometHookTargets,
+} from '../workflow-contract/hook-target-scope.js';
 import { configuredHookWritePath } from '../workflow-contract/hook-write-policy.js';
 import type { CometHookDecision, CometHookRequest } from './hook-types.js';
 import type { CometWorkflow } from './types.js';
@@ -317,6 +323,36 @@ export async function resolveHookWorkflowOwner(
   }
 }
 
+/** 项目配置和当前需求尚未找到时，也必须保护本机 Runtime。 */
+export async function inspectCometRuntimeWriteTargets(
+  projectRoot: string,
+  request: CometHookRequest,
+  relativeProjectRoot = projectRoot,
+): Promise<CometHookDecision | null> {
+  if (request.intent !== 'write' || request.targets.length === 0) return null;
+  const runtimeRoot = resolveWorkspaceRuntimeRootSync(projectRoot);
+  const legacyRuntimeRoot = path.join(projectRoot, '.comet', 'runtime');
+  for (const target of normalizeCometHookTargets(request.targets)) {
+    for (const absolute of cometHookRuntimeTargetCandidates(
+      relativeProjectRoot,
+      target,
+      request.cwd,
+    )) {
+      if (
+        (await isCometHookTargetWithin(runtimeRoot, absolute)) ||
+        (await isCometHookTargetWithin(legacyRuntimeRoot, absolute))
+      ) {
+        return {
+          allowed: false,
+          reason:
+            'Comet Runtime-owned files are maintained by Runtime commands. Run comet status in the guarded project and follow its continuation; do not edit local execution state directly.',
+        };
+      }
+    }
+  }
+  return null;
+}
+
 export async function inspectCometHook(
   projectRoot: string,
   request: CometHookRequest,
@@ -356,6 +392,8 @@ export async function inspectCometHook(
 
   let projectRequest: CometHookRequest;
   try {
+    const runtimeDecision = await inspectCometRuntimeWriteTargets(projectRoot, request);
+    if (runtimeDecision) return runtimeDecision;
     const scoped = await (dependencies.scopeTargets ?? scopeCometHookTargets)(
       projectRoot,
       request.targets,
@@ -386,7 +424,9 @@ export async function inspectCometHook(
       if (
         targets.some(
           (target) =>
-            target === '.comet/current-change.json' || target.startsWith('.comet/runtime/'),
+            target === '.comet/current-change.json' ||
+            target === '.comet/runtime' ||
+            target.startsWith('.comet/runtime/'),
         )
       )
         return {

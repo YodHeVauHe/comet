@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { createNativePortableState } from '../../../domains/comet-native/native-portable-state.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -30,7 +31,11 @@ async function fixture() {
   const created = await nativeNewCommand(['lock-test'], root);
   expect(created.exitCode).toBe(0);
   const name = 'lock-test';
-  const lock = path.join(root, '.comet/runtime/state-projections/native', `${name}.lock`);
+  const lock = path.join(
+    resolveWorkspaceRuntimeRootSync(root),
+    'state-projections/native',
+    `${name}.lock`,
+  );
   const request = path.join(root, 'inspect.json');
   await fs.writeFile(request, JSON.stringify({ operation: 'inspect', runId: name }));
   return { root, name, lock, request };
@@ -149,7 +154,9 @@ describe('Native SDK read-only projection lock diagnostics', () => {
   it('diagnoses a missing Run without restoring it, then explicit repair preserves its revision', async () => {
     const { root, name } = await fixture();
     const original = await readNativeSdkRunRecord(root, name);
-    await fs.rm(path.join(root, '.comet/runtime/sdk-runs/native'), { recursive: true });
+    await fs.rm(path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs/native'), {
+      recursive: true,
+    });
     const before = await files(root);
     await expect(nativeStatusCommand([name], root)).rejects.toThrow(/checkpoint recovery/);
     const doctor = await nativeDoctorCommand([name], root);
@@ -170,7 +177,11 @@ describe('Native SDK read-only projection lock diagnostics', () => {
 
   it('reports missing projection recovery without creating a marker during status or doctor', async () => {
     const { root, name } = await fixture();
-    const marker = path.join(root, '.comet/runtime/state-projections/native', `${name}.json`);
+    const marker = path.join(
+      resolveWorkspaceRuntimeRootSync(root),
+      'state-projections/native',
+      `${name}.json`,
+    );
     await fs.rm(marker);
     const before = await files(root);
     await expect(nativeStatusCommand([name], root)).rejects.toThrow(/marker needs recovery/);
@@ -239,7 +250,9 @@ describe('Native SDK read-only projection lock diagnostics', () => {
   it('diagnoses lost ownership read-only and explicitly restores the same existing Run', async () => {
     const { root, name } = await fixture();
     const original = await readNativeSdkRunRecord(root, name);
-    await fs.rm(path.join(root, '.comet/runtime/change-owners'), { recursive: true });
+    await fs.rm(path.join(resolveWorkspaceRuntimeRootSync(root), 'change-owners'), {
+      recursive: true,
+    });
     const before = await files(root);
     await expect(nativeStatusCommand([name], root)).rejects.toThrow(/checkpoint recovery/);
     expect((await nativeDoctorCommand([name], root)).data).toMatchObject({ healthy: false });

@@ -59,7 +59,7 @@ async function assertNativeChangeSelectable(
       : createRuntime({
           workflows: [],
           store: createFileRuntimeStore<WorkflowRun>({
-            rootDir: path.join(paths.projectRoot, '.comet/runtime/sdk-runs/native'),
+            rootDir: path.join(paths.workspaceRuntimeRoot, 'sdk-runs/native'),
           }),
         });
     const run = await runtime.inspect(name);

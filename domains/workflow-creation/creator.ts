@@ -1,3 +1,7 @@
+import {
+  resolveWorkspaceRuntimeRoot,
+  resolveWorkspaceRuntimeRootSync,
+} from '../workflow-contract/workspace-runtime.js';
 import { promises as fs, existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -8,6 +12,7 @@ import {
   defineRuntimeHandler,
   hashRuntimeValue,
   RuntimeProtocolError,
+  type RuntimeStore,
   type RuntimeValue,
   type WorkflowRun,
   type WorkflowRuntime,
@@ -299,6 +304,7 @@ function evaluationRequest(root: string, run: Readonly<WorkflowRun>) {
 /** SDK持有创作进度；宿主只负责自然语言分析和真实Skill调查，机器步骤由固定执行器完成。 */
 export function createCreatorRuntime(projectRoot: string): WorkflowRuntime {
   const root = path.resolve(projectRoot);
+  const initialRuntimeRoot = resolveWorkspaceRuntimeRootSync(root);
   const staging = contained(root, '.comet/creator/packages');
   const work = (execute: (run: Readonly<WorkflowRun>) => Promise<unknown>) =>
     defineRuntimeHandler({
@@ -445,8 +451,30 @@ export function createCreatorRuntime(projectRoot: string): WorkflowRuntime {
       message: '保留创作与工件；用户已拒绝当前决定。',
     })),
   };
+  const store = async () => {
+    const assertCurrentRoot = (current: string) => {
+      if (current !== initialRuntimeRoot)
+        throw new RuntimeProtocolError(
+          'WORKFLOW_CHANGED',
+          '工作区身份已改变，请重新创建 Creator Runtime',
+        );
+    };
+    assertCurrentRoot(resolveWorkspaceRuntimeRootSync(root));
+    const current = await resolveWorkspaceRuntimeRoot(root);
+    assertCurrentRoot(current);
+    return createFileRuntimeStore<WorkflowRun>({
+      rootDir: path.join(current, 'creator'),
+    });
+  };
+  const persistent: RuntimeStore<WorkflowRun> = {
+    read: async (runId) => (await store()).read(runId),
+    compareAndSwap: async (runId, revision, next) =>
+      (await store()).compareAndSwap(runId, revision, next),
+    restoreCheckpoint: async (runId, revision, checkpoint) =>
+      (await store()).restoreCheckpoint!(runId, revision, checkpoint),
+  };
   const runtime = createRuntime({
-    store: createFileRuntimeStore({ rootDir: path.join(root, '.comet/runtime/creator') }),
+    store: persistent,
     workflows: [
       {
         id: 'comet-creator',
@@ -813,22 +841,44 @@ export function creatorSummary(run: WorkflowRun) {
 
 /** 目录只用于发现Run身份；返回状态仍由SDK校验完整版本历史。 */
 export async function listCreatorRuns(projectRoot: string) {
-  const root = contained(path.resolve(projectRoot), '.comet/runtime/creator');
+  const root = path.join(await resolveWorkspaceRuntimeRoot(projectRoot), 'creator');
   if (!existsSync(root)) return [];
   const runtime = createCreatorRuntime(projectRoot);
   const summaries: ReturnType<typeof creatorSummary>[] = [];
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.isSymbolicLink())
+    if (/^\.[a-f0-9]{64}\.[a-f0-9-]{36}\.tmp$/u.test(entry.name)) {
+      if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('创作存储临时文件类型无效');
+      continue;
+    }
+    if (entry.name === '.runtime-store-v2') {
+      if (!entry.isDirectory() || entry.isSymbolicLink())
+        throw new Error('创作存储目录含异常项目；保留现场后修正');
+      continue;
+    }
+    if (entry.isSymbolicLink() || !/^[a-f0-9]{64}$/u.test(entry.name))
       throw new Error('创作存储目录含异常项目；保留现场后修正');
-    const directory = path.join(root, entry.name);
-    const revisions = (await fs.readdir(directory))
-      .filter((name) => /^[0-9]{16}\.json$/u.test(name))
-      .sort();
-    if (!revisions.length) continue;
-    if (lstatSync(path.join(directory, revisions.at(-1)!)).isSymbolicLink())
-      throw new Error('创作记录不能是符号链接');
-    const record = JSON.parse(await fs.readFile(path.join(directory, revisions.at(-1)!), 'utf8'));
-    summaries.push(creatorSummary(await runtime.inspect(text(record.runId, 'Run身份'))));
+    const target = path.join(root, entry.name);
+    let record: { runId?: unknown };
+    if (entry.isFile()) {
+      const marker = JSON.parse(await fs.readFile(target, 'utf8'));
+      if (marker.schema !== 'comet.runtime-store-format.v2')
+        throw new Error('创作存储格式标记无效；保留现场后修正');
+      record = marker;
+    } else if (entry.isDirectory()) {
+      const revisions = (await fs.readdir(target))
+        .filter((name) => /^[0-9]{16}\.json$/u.test(name))
+        .sort();
+      if (!revisions.length) continue;
+      if (lstatSync(path.join(target, revisions.at(-1)!)).isSymbolicLink())
+        throw new Error('创作记录不能是符号链接');
+      const legacy = JSON.parse(await fs.readFile(path.join(target, revisions.at(-1)!), 'utf8'));
+      record = legacy.schema === 'comet.runtime-store-checkpoint.v1' ? legacy.record : legacy;
+    } else throw new Error('创作存储目录含异常项目；保留现场后修正');
+    // 此处只发现身份；inspect 仍核验写入权威与所有内容 hash。
+    const runId = text(record.runId, 'Run身份');
+    const persisted = await createFileRuntimeStore<WorkflowRun>({ rootDir: root }).read(runId);
+    if (!persisted) continue;
+    summaries.push(creatorSummary(await runtime.inspect(runId)));
   }
   return summaries;
 }

@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -57,7 +58,7 @@ async function fixture(base: 'standalone' | 'native' | 'classic-hotfix' = 'stand
   const saved = readPortableRunCheckpoint(createPortableRunCheckpoint(run), run.runId, {
     preserveSourceRevision: true,
   })!;
-  const rootDir = path.join(root, '.comet/runtime/applications/editorial');
+  const rootDir = path.join(resolveWorkspaceRuntimeRootSync(root), 'applications/editorial');
   const raw = createFileRuntimeStore<{
     runId: string;
     revision: number;
@@ -127,7 +128,12 @@ describe('fixed application checkpoint store boundary', () => {
       expect(await f.loaded.store.restoreCheckpoint!(f.saved.runId, null, f.saved)).toBe(true);
       await f.lose();
       await fs.writeFile(
-        path.join(f.root, '.comet/runtime/change-owners', workflow, `${f.saved.runId}.json`),
+        path.join(
+          resolveWorkspaceRuntimeRootSync(f.root),
+          'change-owners',
+          workflow,
+          `${f.saved.runId}.json`,
+        ),
         JSON.stringify({ ...owner, application: 'another-application' }),
       );
       await expect(f.loaded.store.restoreCheckpoint!(f.saved.runId, null, f.saved)).rejects.toThrow(

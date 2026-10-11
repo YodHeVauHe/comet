@@ -4,6 +4,7 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { parseDocument } from 'yaml';
+import { resolveClassicRunDirectory } from '../../../domains/comet-classic/classic-runtime-paths.js';
 
 const scriptsDir = path.resolve('assets', 'skills', 'comet', 'scripts');
 const classicRuntimeRoot = path.resolve('assets', 'skills', 'comet', 'runtime', 'classic');
@@ -449,7 +450,13 @@ describe('comet scripts', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).not.toContain('classic runtime package is not installed');
     const runState = await fs.readFile(
-      path.join(tmpDir, 'openspec', 'changes', 'embedded-runtime', '.comet', 'run-state.json'),
+      path.join(
+        await resolveClassicRunDirectory(
+          path.join(tmpDir, 'openspec', 'changes', 'embedded-runtime'),
+        ),
+        '.comet',
+        'run-state.json',
+      ),
       'utf8',
     );
     expect(JSON.parse(runState)).toMatchObject({ skill: 'comet-classic' });
@@ -1330,11 +1337,11 @@ describe('comet scripts', () => {
     expect(archive.stdout).toContain('SKILL: comet-archive');
   }, 20_000);
 
-  it('next exits non-zero when .comet.yaml is missing', async () => {
+  it('next exits non-zero when comet-state.yaml is missing', async () => {
     const result = runNode(tmpDir, stateScript, ['next', 'next-missing']);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('.comet.yaml not found');
+    expect(result.stderr).toContain('comet-state.yaml not found');
   }, 20_000);
 
   it('task-checkoff verifies one uniquely checked task', async () => {

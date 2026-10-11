@@ -136,7 +136,7 @@ describe('Classic workspace preparation and routing', () => {
     );
     expect(initialized.exitCode, initialized.stderr).toBe(0);
     await expect(
-      fs.access(path.join(prepared.projectRoot, 'openspec/changes/sdk-linked/.comet.yaml')),
+      fs.access(path.join(prepared.projectRoot, 'openspec/changes/sdk-linked/comet-state.yaml')),
     ).resolves.toBeUndefined();
 
     const resolved = await resolveClassicWorkspace({ projectRoot: root, name: 'sdk-linked' });
@@ -304,7 +304,7 @@ describe('Classic workspace preparation and routing', () => {
     expect((await classicStateCommand(['get', name, 'phase'], primaryOptions)).stdout).toBe(
       'verify\n',
     );
-    await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
   });
 
   it('selects a local legacy Classic change before a same-named SDK change in another worktree', async () => {

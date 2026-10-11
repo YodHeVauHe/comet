@@ -24,6 +24,7 @@ import {
 import type { ClassicState } from './classic-state.js';
 import {
   classicSdkCheckRecordRef,
+  classicSdkCheckDirectoryRef,
   recordClassicSdkCheckReceipt,
 } from './classic-sdk-check-record.js';
 
@@ -202,7 +203,7 @@ export async function runClassicSdkCommandCheck(
   input: ClassicSdkCheckInput,
 ): Promise<Pick<RuntimeOutcome, 'status' | 'output'>> {
   const { root, cwd, state, scope, timeoutMs, change } = await checkedInput(run, action, input);
-  const checksDir = path.join(change.target, '.comet', 'checks');
+  const checksDir = path.join(root, classicSdkCheckDirectoryRef(run));
   await ensureClassicProjectDirectory(root, checksDir, 'Classic SDK check evidence');
   const identity = { argv: [...input.argv], cwd: cwd.relative };
   const snapshotOptions = { verificationReport: state.verificationReport };

@@ -3861,6 +3861,7 @@ describe('update command helpers', () => {
 
   it('installs ambient resume instructions for Classic-only projects', async () => {
     await arrangeClassicDocsOpenSpecUpdate(tmpDir);
+    await fs.writeFile(path.join(tmpDir, '.gitignore'), 'node_modules/\n', 'utf8');
     await fs.writeFile(path.join(tmpDir, 'AGENTS.md'), '# User\n\nKeep this.\n', 'utf8');
     await fs.writeFile(path.join(tmpDir, 'CLAUDE.md'), '# User\n\nAlso keep this.\n', 'utf8');
 
@@ -3887,6 +3888,10 @@ describe('update command helpers', () => {
     }
     expect(agents).toContain('# User\n\nKeep this.');
     expect(claude).toContain('# User\n\nAlso keep this.');
+    const gitignore = await fs.readFile(path.join(tmpDir, '.gitignore'), 'utf8');
+    expect(gitignore).toContain('node_modules/\n');
+    expect(gitignore).toContain('!/.comet/config.yaml\n');
+    expect(gitignore).toContain('.comet-archive-staging/\n');
   });
 
   it('removes ambient resume instructions when the project disables the probe', async () => {

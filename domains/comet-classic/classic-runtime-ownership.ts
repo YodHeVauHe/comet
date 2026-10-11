@@ -1,3 +1,8 @@
+import { resolveClassicStateFile, isClassicStateFileName } from './classic-state-file.js';
+import {
+  isWorkspaceRuntimeMigrationFence,
+  resolveWorkspaceRuntimeRoot,
+} from '../workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -17,7 +22,10 @@ import {
   ensureProtectedProjectDirectory,
   inspectProtectedProjectPath,
 } from '../workflow-contract/protected-project-path.js';
-import { assertOpenSpecChangeName, resolveClassicChangeDirectory } from './classic-paths.js';
+import {
+  inspectClassicStateFileCandidates,
+  resolveClassicChangeDirectory,
+} from './classic-paths.js';
 import { createClassicSdkRun } from './classic-sdk-create.js';
 import {
   createClassicSdkStateStore,
@@ -40,13 +48,22 @@ export async function inspectPristineClassicSdkState(
     throw new Error(`Invalid Classic state: ${document.errors[0].message}`);
   const initial = parseClassicStateDocument(document.toJS() as Record<string, unknown>).classic;
   const contents = await fs.readdir(directory);
+  const portableContents: string[] = [];
+  for (const name of contents) {
+    if (
+      name === '.comet-state.lock' &&
+      (await isWorkspaceRuntimeMigrationFence(path.join(directory, name)))
+    )
+      continue;
+    portableContents.push(name);
+  }
   return initial?.phase === 'open' &&
     initial.designDoc === null &&
     initial.plan === null &&
     initial.verifyResult === 'pending' &&
     initial.verifyFailures === 0 &&
     !initial.archived &&
-    contents.every((name) => name === '.comet.yaml' || name === '.openspec.yaml')
+    portableContents.every((name) => isClassicStateFileName(name) || name === '.openspec.yaml')
     ? initial
     : null;
 }
@@ -69,7 +86,7 @@ export async function restoreClassicSdkChange(
     const resumed = await createClassicSdkStateStore(projectRoot).read(change);
     if (resumed) return resumed;
     const directory = (await resolveClassicChangeDirectory(change, projectRoot)).directory;
-    const file = path.join(directory, '.comet.yaml');
+    const file = await resolveClassicStateFile(directory);
     const source = await readClassicProjectFile(projectRoot, file, {
       label: 'Classic change state',
     });
@@ -126,13 +143,14 @@ export async function withClassicChangeOwnershipLock<T>(
   change: string,
   work: () => Promise<T>,
 ): Promise<T> {
-  assertOpenSpecChangeName(change);
-  const directory = '.comet/runtime/change-owners/classic';
-  await ensureProtectedProjectDirectory(projectRoot, directory, {
+  await inspectClassicStateFileCandidates(projectRoot, change);
+  const runtimeRoot = await resolveWorkspaceRuntimeRoot(projectRoot);
+  const directory = 'change-owners/classic';
+  await ensureProtectedProjectDirectory(runtimeRoot, directory, {
     label: 'Classic change ownership directory',
   });
   const ref = `${directory}/${change}.lock`;
-  const lock = await inspectProtectedProjectPath(projectRoot, ref, {
+  const lock = await inspectProtectedProjectPath(runtimeRoot, ref, {
     label: 'Classic change ownership lock',
     expected: 'file',
   });
@@ -143,7 +161,10 @@ export async function assertClassicSdkStartAvailable(options: {
   projectRoot: string;
   changeDirRef: string;
 }): Promise<void> {
-  const ref = path.posix.join(options.changeDirRef.replaceAll('\\', '/'), '.comet.yaml');
+  const ref = path.relative(
+    options.projectRoot,
+    await resolveClassicStateFile(path.resolve(options.projectRoot, options.changeDirRef)),
+  );
   const state = await inspectProtectedProjectPath(options.projectRoot, ref, {
     label: 'Classic legacy change state',
     expected: 'file',
@@ -179,13 +200,14 @@ export async function resolveClassicChangeRuntimeOwner(
   projectRoot: string,
   change: string,
 ): Promise<ChangeRuntimeOwner | null> {
+  await inspectClassicStateFileCandidates(projectRoot, change);
   const current = await readChangeRuntimeOwner(projectRoot, 'classic', change);
   if (current) return current;
   return withClassicChangeOwnershipLock(projectRoot, change, async () => {
     const bound = await readChangeRuntimeOwner(projectRoot, 'classic', change);
     if (bound) return bound;
     const directory = (await resolveClassicChangeDirectory(change, projectRoot)).directory;
-    const stateRef = path.relative(projectRoot, path.join(directory, '.comet.yaml'));
+    const stateRef = path.relative(projectRoot, await resolveClassicStateFile(directory));
     const state = await inspectProtectedProjectPath(projectRoot, stateRef, {
       label: 'Classic legacy change state',
       expected: 'file',

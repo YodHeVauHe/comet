@@ -1,3 +1,4 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
 import { createHash } from 'crypto';
 import { handoffSourceHash } from './classic-handoff-source.js';
 import { readClassicArtifactRequirements } from './classic-artifact-requirements.js';
@@ -24,7 +25,7 @@ import {
   writeCheckpoint,
   writeContext,
   writePendingAction,
-} from '../../domains/engine/run-store.js';
+} from './classic-run-store.js';
 import type { Checkpoint, EngineAction, RunState } from '../../domains/engine/types.js';
 import { assertClassicLayoutWritable, classicProjectRelative } from './classic-layout.js';
 import {
@@ -614,7 +615,7 @@ export async function validateClassicSdkDesignContext(options: {
 }
 
 async function readField(projectRoot: string, changeDir: string, field: string): Promise<string> {
-  const file = path.join(changeDir, '.comet.yaml');
+  const file = await resolveClassicStateFile(changeDir);
   const document = parseDocument(
     await readClassicProjectFile(projectRoot, file, { label: 'Classic change state' }),
     { uniqueKeys: false },
@@ -793,9 +794,13 @@ export const compatHandoffCommand: ClassicCommandHandler = withProjectContext(as
           const managedRun =
             active.stateExists &&
             hasClassicManagedRunMarker(
-              await readClassicProjectFile(layout.projectRoot, `${changeDir}/.comet.yaml`, {
-                label: 'Classic handoff state',
-              }),
+              await readClassicProjectFile(
+                layout.projectRoot,
+                await resolveClassicStateFile(changeDir),
+                {
+                  label: 'Classic handoff state',
+                },
+              ),
             );
           output.stderr.push(
             managedRun

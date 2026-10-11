@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { afterEach, beforeAll, expect, it } from 'vitest';
 import { ensureCliBuilt } from '../helpers/ensure-cli-built.js';
 import { createDiskApplication } from '../helpers/workflow-application.js';
+import { resolveWorkspaceRuntimeRootSync } from '../../domains/workflow-contract/workspace-runtime.js';
 
 const execute = promisify(execFile);
 const repository = path.resolve('.');
@@ -120,5 +121,7 @@ it('rejects credential-bearing Eval configuration before creating a Run', async 
       '--json',
     ),
   ).rejects.toMatchObject({ code: 1 });
-  expect(await fs.stat(path.join(root, '.comet/runtime/creator')).catch(() => null)).toBeNull();
+  expect(
+    await fs.stat(path.join(resolveWorkspaceRuntimeRootSync(root), 'creator')).catch(() => null),
+  ).toBeNull();
 });

@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRoot } from '../workflow-contract/workspace-runtime.js';
 import path from 'node:path';
 
 import {
@@ -32,7 +33,15 @@ export function isNativeSdkCheckAction(action: Readonly<RuntimeAction>): boolean
 }
 
 export function nativeSdkCheckRuntimeRef(run: Readonly<WorkflowRun>): string {
-  return `.comet/runtime/native/sdk-checks/${hashRuntimeValue(run.runId)}`;
+  return `native/sdk-checks/${hashRuntimeValue(run.runId)}`;
+}
+
+/** 已保存的检查回执保留原始内容，只在解析本机存储路径时兼容旧前缀。 */
+export function nativeSdkCheckStorageRef(ref: string): string {
+  const normalized = ref.startsWith('.comet/runtime/') ? ref.slice('.comet/runtime/'.length) : ref;
+  if (!normalized.startsWith('native/sdk-checks/'))
+    throw new Error('Invalid Native SDK check storage reference');
+  return normalized;
 }
 
 interface ProcessInstance {
@@ -66,13 +75,14 @@ async function readExecution(
   run: Readonly<WorkflowRun>,
   action: Readonly<RuntimeAction>,
 ) {
+  const runtimeRoot = await resolveWorkspaceRuntimeRoot(projectRoot);
   const ref = executionRef(run, action);
-  const file = await inspectProtectedProjectPath(projectRoot, ref, {
+  const file = await inspectProtectedProjectPath(runtimeRoot, ref, {
     label: 'Native 检查执行记录',
     expected: 'file',
   });
   if (!file.exists) return null;
-  const { bytes } = await readProtectedProjectFile(projectRoot, ref, 8 * 1024 * 1024, {
+  const { bytes } = await readProtectedProjectFile(runtimeRoot, ref, 8 * 1024 * 1024, {
     label: 'Native 检查执行记录',
   });
   const value = JSON.parse(bytes.toString('utf8')) as NativeSdkCheckExecution;
@@ -102,13 +112,14 @@ export async function createNativeSdkCheckExecution(options: {
   plansHash: string;
 }) {
   const { projectRoot, run, action } = options;
+  const runtimeRoot = await resolveWorkspaceRuntimeRoot(projectRoot);
   if (!action.claim) throw new Error('Native 检查缺少领取身份');
   await ensureProtectedProjectDirectory(
-    projectRoot,
+    runtimeRoot,
     `${nativeSdkCheckRuntimeRef(run)}/executions`,
     { label: 'Native 检查执行记录' },
   );
-  const file = path.join(projectRoot, ...executionRef(run, action).split('/'));
+  const file = path.join(runtimeRoot, ...executionRef(run, action).split('/'));
   const execution: NativeSdkCheckExecution = {
     schema: 'comet.native.sdk-check-execution.v1',
     runId: run.runId,
@@ -123,13 +134,13 @@ export async function createNativeSdkCheckExecution(options: {
     checks: [],
   };
   await atomicWriteContainedText(file, JSON.stringify(execution), {
-    containedRoot: projectRoot,
+    containedRoot: runtimeRoot,
     exclusive: true,
     requireAtomicPublication: true,
   });
   const assertNotStopped = async () => {
     const stop = await inspectProtectedProjectPath(
-      projectRoot,
+      runtimeRoot,
       `${executionRef(run, action)}.stop`,
       { label: 'Native 检查取消请求', expected: 'file' },
     );
@@ -139,7 +150,7 @@ export async function createNativeSdkCheckExecution(options: {
   const save = () => {
     const text = JSON.stringify(execution);
     const result = writing.then(() =>
-      atomicWriteContainedText(file, text, { containedRoot: projectRoot }),
+      atomicWriteContainedText(file, text, { containedRoot: runtimeRoot }),
     );
     writing = result.catch(() => {});
     return result;
@@ -254,20 +265,21 @@ export async function requestNativeSdkCheckStop(options: {
   action: Readonly<RuntimeAction>;
 }) {
   const { projectRoot, run, action } = options;
+  const runtimeRoot = await resolveWorkspaceRuntimeRoot(projectRoot);
   await ensureProtectedProjectDirectory(
-    projectRoot,
+    runtimeRoot,
     `${nativeSdkCheckRuntimeRef(run)}/executions`,
     { label: 'Native 检查停止请求' },
   );
   await atomicWriteContainedText(
-    path.join(projectRoot, ...`${executionRef(run, action)}.stop`.split('/')),
+    path.join(runtimeRoot, ...`${executionRef(run, action)}.stop`.split('/')),
     JSON.stringify({
       actionId: action.id,
       attempt: action.attempt,
       inputHash: action.inputHash,
       claimHash: hashRuntimeValue(action.claim?.token ?? null),
     }),
-    { containedRoot: projectRoot },
+    { containedRoot: runtimeRoot },
   );
 }
 
@@ -277,17 +289,18 @@ export async function hasNativeSdkCheckStopRequest(options: {
   action: Readonly<RuntimeAction>;
 }): Promise<boolean> {
   const { projectRoot, run, action } = options;
+  const runtimeRoot = await resolveWorkspaceRuntimeRoot(projectRoot);
   const ref = `${executionRef(run, action)}.stop`;
   if (
     !(
-      await inspectProtectedProjectPath(projectRoot, ref, {
+      await inspectProtectedProjectPath(runtimeRoot, ref, {
         label: 'Native 检查停止请求',
         expected: 'file',
       })
     ).exists
   )
     return false;
-  const { bytes } = await readProtectedProjectFile(projectRoot, ref, 16384, {
+  const { bytes } = await readProtectedProjectFile(runtimeRoot, ref, 16384, {
     label: 'Native 检查停止请求',
   });
   const value = JSON.parse(bytes.toString('utf8'));

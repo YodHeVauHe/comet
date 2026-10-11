@@ -67,7 +67,9 @@ Native 应用通过 `comet native archive <change> --recover` 向 CLI 宿主提�
 
 用户接受验收结果后，一次 `comet native archive <change>` 会顺序完成当前可执行的归档准备、应用和收尾；Supervisor 已批准的交付及清理也沿原契约执行。每项 Action 仍独立持久化检查点、重验证据并以当前 revision 提交。遇到用户决定、证据等待、扩展步骤、失败或 running/unknown Action 时停止，并返回当前结果。中断后从原检查点继续，已完成归档可安全重复调用；`--dry-run` 只预览当前是否可执行，不推进 Action。
 
-新 change 在原路径的 `comet-state.yaml` / `.comet.yaml` 中保留 `run_checkpoint`。将状态文件、正式文档和已经修改的代码一起转移到配置一致的新 checkout 后，普通 Native/Classic change 可在缺少本机 Run 记录时恢复同一 Run，保留已保存的阶段、Actions 和确认，不会回到 Shape/Open。检查点摘要、工件或工作区绑定不匹配时拒绝恢复；已领取但结果未知的外部动作保持 `unknown`，必须先停止原执行者、核对现场，再按 reconciliation 协议继续，不能自动重放。
+SDK 新 change 在原路径的 `comet-state.yaml`（Classic 历史 `.comet.yaml` 原地兼容）中保留 `run_checkpoint`。将实际状态文件、正式文档、引用工件、已经修改的代码和项目配置一起转移到配置一致的新 checkout 后，普通 Native/Classic change 可在缺少本机 Run 记录时恢复同一 Run，保留已保存的阶段、Actions 和确认，不会回到 Shape/Open。检查点摘要、工件或工作区绑定不匹配时拒绝恢复；已领取但结果未知的外部动作保持 `unknown`，必须先停止原执行者、核对现场，再按 reconciliation 协议继续，不能自动重放。
+
+Classic 历史 `.comet.yaml` 保持原地读取、写入、恢复与归档，显式 compat 初始化仍使用 `.comet.yaml`。同一 change 下两种文件共存时（包括其中一个是失效符号链接），Runtime 会拒绝冲突，不静默择一或覆盖状态。保留两个文件并核对来源后再处理冲突。Native 与 Classic 的目录和状态 schema 仍各自独立。
 
 Supervisor Child 的独立 worktree 和未提交代码不包含在父状态文件中。Child Builder 阶段可在确认原执行者停止后，通过 `comet native transfer export <change> --output <新目录> --confirmed-stopped` 和 `comet native transfer import --input <目录>` 显式转移。包内包含临时 Git 分支和非忽略的 worktree 修改，必须作为私有资料保存；忽略文件与外部依赖需要另行准备。只复制父状态文件不能接管已启动的 Child。旧状态文件没有检查点时，才需要用户显式确认后，从 Shape/Open 保留正式文档重建；旧确认和检查结果不能直接沿用。具体支持阶段和拒绝条件见 [Native/Classic 接入边界](./runtime-sdk-native-classic-integration.zh.md)。
 
@@ -106,7 +108,7 @@ Supervisor Child 的独立 worktree 和未提交代码不包含在父状态文�
 
 ```ts
 const runtime = createRuntime({
-  store: createFileRuntimeStore({ rootDir: '.comet/runtime' }),
+  store: createFileRuntimeStore({ rootDir: '.comet/sdk-example' }),
   workflows: [reportWorkflow],
 });
 
@@ -193,7 +195,7 @@ Store、Executor 与 Validator 都是显式依赖。SDK 当前不暴露可任意
 适合平台 Agent 只能运行命令、不便导入 JavaScript SDK 的场景：
 
 ```bash
-comet runtime dispatch --request ./start.json --workflow ./report.workflow.json --root-dir ./.comet/runtime --json
+comet runtime dispatch --request ./start.json --workflow ./report.workflow.json --root-dir ./.comet/sdk-example --json
 ```
 
 `start.json` 示例：
@@ -238,7 +240,7 @@ Native 会分别展示 `cancelling`（原执行尚未确认停止，或当前选
 
 Native 应用的 CLI `claim` 和 `record-outcome` 默认返回 `data.schema: "comet.native.dispatch-result.v1"`：保留 Run 身份、revision、完整 `state`、当前完整 `action`（含输入、领取信息和结果收据）及 `continuation`，不重复输出其它 Action 历史。领取结果还提供 `outcomeRequest`，宿主必须填入真实执行状态、结果和唯一 outcome ID，再按原身份提交；模板不代表执行已成功。需要旧版完整 Run 的 CLI 调用方应加 `--details`；`inspect` 始终返回完整 Run，紧凑结果的 `inspection.request` 可直接用于查看。JavaScript SDK 与程序化 `runtimeDispatchCommand` 的 `response.data` 仍是完整 Run。
 
-Native 和 Classic 的内置 Workflow Application 可以使用 `--application native|classic-full|classic-hotfix|classic-tweak` 注册。Run 固定写入项目的 `.comet/runtime/sdk-runs/native` 或 `.comet/runtime/sdk-runs/classic`；两个 workflow 可以使用相同的 change 名称，但不能指定另一处 `--root-dir`，也不能与 `--workflow` 混用。每次推进同一 Run 时都传入对应的 `--application`；除了上面的通用操作，还可用 `execute` 领取并执行应用已注册的 Executor，用 `record-evidence` 提交已声明的证据等待，用 `invalidate-evidence` 恢复经验证失效且声明了恢复转移的证据。宿主仍须提供真实的初始状态、工件和外部 Agent 执行结果。Native `new` 与 Classic `state init` 已默认创建 SDK Run，并在 change 原路径保留 `comet-state.yaml` 或 `.comet.yaml`；已有原 Runtime change 继续按 `compat` 路径恢复。
+Native 和 Classic 的内置 Workflow Application 可以使用 `--application native|classic-full|classic-hotfix|classic-tweak` 注册。Run 固定写入用户级工作区目录 `~/.comet/workspaces/<workspace-id>/runtime/sdk-runs/native` 或对应的 `classic` 子目录，`COMET_DATA_DIR` 可替换用户数据根；两个 workflow 可以使用相同的 change 名称，但不能指定另一处 `--root-dir`，也不能与 `--workflow` 混用。旧本机目录会经过校验后迁移，项目状态文件保持可移植，具体边界见[本机 Runtime 存储](./runtime-local-storage.zh.md)。每次推进同一 Run 时都传入对应的 `--application`；除了上面的通用操作，还可用 `execute` 领取并执行应用已注册的 Executor，用 `record-evidence` 提交已声明的证据等待，用 `invalidate-evidence` 恢复经验证失效且声明了恢复转移的证据。宿主仍须提供真实的初始状态、工件和外部 Agent 执行结果。Native `new` 与 Classic `state init` 已默认创建 SDK Run，并在 change 原路径保留 `comet-state.yaml`（Classic 历史 `.comet.yaml` 原地兼容）；已有原 Runtime change 继续按 `compat` 路径恢复。
 
 ## Comet 自身的接入方式
 

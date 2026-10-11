@@ -1,3 +1,5 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
+import { resolveClassicLocalTarget } from '../../../domains/comet-classic/classic-runtime-paths.js';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import * as childProcess from 'node:child_process';
@@ -372,19 +374,6 @@ async function checkedFullBuildRun(
   const application = classicDomain.defineClassicWorkflowApplication('full');
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'classic-sdk-build-accept-'));
   temporaryRoots.push(projectRoot);
-  const runtime = createRuntime({
-    store: options.projectedStore
-      ? createClassicSdkStateStore(projectRoot)
-      : options.fileStore
-        ? createFileRuntimeStore<WorkflowRun>({
-            rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
-          })
-        : createMemoryRuntimeStore<WorkflowRun>(),
-    workflows: [application.workflow],
-    transitionHandlers: [application.transitionHandler],
-    evidenceValidators: testEvidenceValidators(application),
-    validators: testOutcomeValidators(application),
-  });
   const changeDir = path.join(projectRoot, 'docs', 'openspec', 'changes', 'example');
   const planFile = path.join(projectRoot, 'docs', 'superpowers', 'plans', '2026-09-24-example.md');
   await fs.mkdir(path.join(projectRoot, '.comet'), { recursive: true });
@@ -431,6 +420,19 @@ async function checkedFullBuildRun(
       { cwd: projectRoot },
     );
   }
+  const runtime = createRuntime({
+    store: options.projectedStore
+      ? createClassicSdkStateStore(projectRoot)
+      : options.fileStore
+        ? createFileRuntimeStore<WorkflowRun>({
+            rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
+          })
+        : createMemoryRuntimeStore<WorkflowRun>(),
+    workflows: [application.workflow],
+    transitionHandlers: [application.transitionHandler],
+    evidenceValidators: testEvidenceValidators(application),
+    validators: testOutcomeValidators(application),
+  });
   const planReceipt = await classicDomain.classicPlanEvidenceReceipt(
     projectRoot,
     'docs/superpowers/plans/2026-09-24-example.md',
@@ -556,7 +558,7 @@ async function inspectPersistedSdkEntry(
     runId: run.runId,
   });
   const store = createFileRuntimeStore<WorkflowRun>({
-    rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+    rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
   });
   expect(await store.read(run.runId)).toEqual(run);
   return classicStateCommand(['check', 'example', phase], {
@@ -672,6 +674,73 @@ function mockSdkPullRequest(commit: string, pr: Record<string, unknown>): void {
 }
 
 describe('Classic workflow application through the public Runtime SDK', () => {
+  it('keeps check inputs unchanged when adopting a raw SDK Run into its portable projection', async () => {
+    const { run, projectRoot } = await checkedFullBuildRun('example', true, {
+      gitBranch: 'sdk-build',
+      fileStore: true,
+    });
+    const check = run.actions.at(-1)!.outcome!.output as { argv: string[]; cwd: string };
+    const change = path.join(projectRoot, 'docs/openspec/changes/example');
+    const before = await checkSnapshots.collectCheckSnapshot(projectRoot, change, check);
+    await registerSdkChangeOwner(projectRoot, {
+      schema: 'comet.change-owner.v1',
+      workflow: 'classic',
+      change: 'example',
+      format: 'sdk',
+      application: 'classic-full',
+      runId: run.runId,
+    });
+    await inspectClassicSdkRun(projectRoot, 'example');
+    const after = await checkSnapshots.collectCheckSnapshot(projectRoot, change, check);
+    expect(after.entries).toEqual(before.entries);
+    expect(after.digest).toBe(before.digest);
+
+    const source = path.join(projectRoot, 'source.js');
+    const contents = await fs.readFile(source, 'utf8');
+    await fs.writeFile(source, `${contents}\n// changed input\n`);
+    expect((await checkSnapshots.collectCheckSnapshot(projectRoot, change, check)).digest).not.toBe(
+      before.digest,
+    );
+    await fs.writeFile(source, contents);
+    const restored = await checkSnapshots.collectCheckSnapshot(projectRoot, change, check, {
+      verificationReport: null,
+    });
+    await fs.writeFile(path.join(change, '.comet-state.lock', 'extra-source.js'), 'export {};\n');
+    expect(
+      (
+        await checkSnapshots.collectCheckSnapshot(projectRoot, change, check, {
+          verificationReport: null,
+        })
+      ).digest,
+    ).not.toBe(restored.digest);
+  });
+
+  it('accepts an existing log for an independent public Run ID but cannot invent portable proof for its missing log', async () => {
+    const { run, projectRoot } = await checkedFullBuildRun('independent-public-run', true);
+    const output = run.actions.at(-1)!.outcome!.output as {
+      receiptRef: string;
+      contentHash: string;
+    };
+    const validator = classicDomain
+      .defineClassicWorkflowApplication('full')
+      .evidenceValidators!.find((entry) => entry.id === 'comet-classic-build-check')!;
+    const validate = () =>
+      validator.validate({
+        run,
+        kind: 'classic-build-check',
+        ref: output.receiptRef,
+        contentHash: output.contentHash,
+        context: { requestId: 'independent-run-check', projectRoot },
+      });
+    expect(await validate()).toMatchObject({ accepted: true, actualHash: output.contentHash });
+    const local = (await resolveClassicLocalTarget(
+      projectRoot,
+      path.join(projectRoot, output.receiptRef),
+    ))!.target;
+    await fs.unlink(local);
+    expect(await validate()).toMatchObject({ accepted: false });
+  });
+
   it('rejects an Archive completion claim while the change is still active', async () => {
     const { runtime, run, projectRoot } = await reachFullArchiveExecuteAction(
       'archive-forged-completion',
@@ -2168,9 +2237,15 @@ describe('Classic workflow application through the public Runtime SDK', () => {
       receiptRef: string;
       contentHash: string;
     };
-    expect(await fs.readFile(path.join(projectRoot, checkOutput.receiptRef), 'utf8')).toContain(
-      'sdk-check-ok',
-    );
+    expect(
+      await fs.readFile(
+        (await resolveClassicLocalTarget(
+          projectRoot,
+          path.join(projectRoot, checkOutput.receiptRef),
+        ))!.target,
+        'utf8',
+      ),
+    ).toContain('sdk-check-ok');
     expect((run.state as ClassicState).phase).toBe('build');
     expect(run.evidenceWaits?.at(-1)).toMatchObject({
       stepId: 'full.build.check.evidence',
@@ -2274,7 +2349,8 @@ describe('Classic workflow application through the public Runtime SDK', () => {
       expect(
         stateReads.mock.calls.filter(
           ([file]) =>
-            String(file) === path.join(projectRoot, 'docs/openspec/changes/example/.comet.yaml'),
+            String(file) ===
+            path.join(projectRoot, 'docs/openspec/changes/example/comet-state.yaml'),
         ),
       ).toHaveLength(1);
     } finally {
@@ -2296,7 +2372,7 @@ describe('Classic workflow application through the public Runtime SDK', () => {
     });
     const persisted = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
       }),
       workflows: [],
     });
@@ -2332,7 +2408,7 @@ describe('Classic workflow application through the public Runtime SDK', () => {
     expect(resumed.data).toMatchObject({ change: 'example', phase: 'verify' });
     const persisted = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
       }),
       workflows: [],
     });
@@ -2390,7 +2466,7 @@ describe('Classic workflow application through the public Runtime SDK', () => {
     expect(applied.data).toMatchObject({ change: 'example', phase: 'archive' });
     const persisted = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
       }),
       workflows: [],
     });
@@ -2411,7 +2487,7 @@ describe('Classic workflow application through the public Runtime SDK', () => {
     ).toBe(true);
     expect(
       await fs.readFile(
-        path.join(projectRoot, 'docs/openspec/changes/example/.comet.yaml'),
+        path.join(projectRoot, 'docs/openspec/changes/example/comet-state.yaml'),
         'utf8',
       ),
     ).toContain('phase: archive');
@@ -2457,7 +2533,7 @@ describe('Classic workflow application through the public Runtime SDK', () => {
     expect(resumed.data).toMatchObject({ change: 'example', phase: 'archive' });
     const persisted = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
       }),
       workflows: [],
     });
@@ -2725,7 +2801,7 @@ describe('Classic workflow application through the public Runtime SDK', () => {
       const sourcePath = path.join(projectRoot, 'source.js');
       const originalSource = await fs.readFile(sourcePath);
       const persisted = createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
       });
       const beforeDrift = await persisted.read(run.runId);
       expect(beforeDrift).not.toBeNull();
@@ -2901,7 +2977,7 @@ describe('Classic workflow application through the public Runtime SDK', () => {
       }).trim();
       const archivedState = path.join(
         projectRoot,
-        'docs/openspec/changes/archive/2026-09-26-example/.comet.yaml',
+        'docs/openspec/changes/archive/2026-09-26-example/comet-state.yaml',
       );
       const committedState = await fs.readFile(archivedState, 'utf8');
       const wrongCommit = await classicStateCommand(
@@ -2958,7 +3034,7 @@ describe('Classic workflow application through the public Runtime SDK', () => {
     });
     const persisted = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
       }),
       workflows: [],
     });

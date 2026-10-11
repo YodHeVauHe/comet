@@ -1,4 +1,6 @@
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { hashRuntimeValue } from '../../../domains/engine/runtime-json.js';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +8,11 @@ import {
   createFileRuntimeStore,
   createMemoryRuntimeStore,
 } from '../../../domains/engine/runtime-store.js';
+
+function runDirectory(rootDir: string, legacy = false): string {
+  const hash = createHash('sha256').update(JSON.stringify('saved')).digest('hex');
+  return legacy ? path.join(rootDir, hash) : path.join(rootDir, '.runtime-store-v2', hash);
+}
 
 interface RecordValue {
   runId: string;
@@ -44,11 +51,14 @@ describe.each(['memory', 'file'])('%s RuntimeStore checkpoint restoration', (kin
     );
     expect((await reopen().read(checkpoint.runId))?.revision).toBe(18);
     if (kind === 'file') {
-      const runDir = path.join(rootDir, (await fs.readdir(rootDir))[0]);
+      const runDir = runDirectory(rootDir);
       expect((await fs.readdir(runDir)).sort()).toEqual([
-        '0000000000000001.json',
-        '0000000000000018.json',
+        '.write.lock.contenders',
+        'checkpoint.json',
       ]);
+      expect(
+        JSON.parse(await fs.readFile(path.join(runDir, 'checkpoint.json'), 'utf8')).record.revision,
+      ).toBe(18);
     }
   });
 
@@ -73,10 +83,10 @@ describe.each(['memory', 'file'])('%s RuntimeStore checkpoint restoration', (kin
     );
     expect((await reopen().read(checkpoint.runId))?.revision).toBe(18);
     if (kind === 'file') {
-      const runDir = path.join(rootDir, (await fs.readdir(rootDir))[0]);
+      const runDir = runDirectory(rootDir);
       expect(
-        JSON.parse(await fs.readFile(path.join(runDir, '0000000000000001.json'), 'utf8')),
-      ).toEqual(partial);
+        JSON.parse(await fs.readFile(path.join(runDir, 'checkpoint.json'), 'utf8')).record,
+      ).toEqual({ ...checkpoint, revision: 18 });
     }
   });
 
@@ -124,7 +134,8 @@ describe('file checkpoint publication', () => {
     async (when) => {
       const { store, reopen } = await fixture('file');
       const link = fs.link.bind(fs);
-      const spy = vi.spyOn(fs, 'link').mockImplementationOnce(async (...args) => {
+      const spy = vi.spyOn(fs, 'link').mockImplementation(async (...args) => {
+        if (!String(args[1]).endsWith('checkpoint.json')) return link(...args);
         if (when === 'after') await link(...args);
         throw new Error('simulated publication interruption');
       });
@@ -144,11 +155,27 @@ describe('file checkpoint publication', () => {
     'rejects %s corruption without overwriting evidence',
     async (damage) => {
       const { store, reopen, rootDir } = await fixture('file');
-      await store.compareAndSwap(checkpoint.runId, null, { ...checkpoint, revision: 1 });
-      await store.restoreCheckpoint!(checkpoint.runId, 1, checkpoint);
-      await store.compareAndSwap(checkpoint.runId, 17, { ...checkpoint, revision: 18 });
-      await store.compareAndSwap(checkpoint.runId, 18, { ...checkpoint, revision: 19 });
-      const runDir = path.join(rootDir, (await fs.readdir(rootDir))[0]);
+      const runDir = runDirectory(rootDir, true);
+      await fs.mkdir(runDir);
+      const entries = [
+        [1, { ...checkpoint, revision: 1 }],
+        [
+          2,
+          {
+            schema: 'comet.runtime-store-checkpoint.v1',
+            record: checkpoint,
+            hash: hashRuntimeValue(checkpoint),
+          },
+        ],
+        [18, { ...checkpoint, revision: 18 }],
+        [19, { ...checkpoint, revision: 19 }],
+      ] as const;
+      for (const [revision, record] of entries) {
+        await fs.writeFile(
+          path.join(runDir, `${String(revision).padStart(16, '0')}.json`),
+          JSON.stringify(record),
+        );
+      }
       if (damage === 'gap') await fs.unlink(path.join(runDir, '0000000000000018.json'));
       else if (damage === 'initial-import')
         await fs.writeFile(

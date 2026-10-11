@@ -1,3 +1,4 @@
+import { isClassicStateFileName } from './classic-state-file.js';
 import path from 'node:path';
 import {
   hashRuntimeValue,
@@ -778,7 +779,7 @@ export function createClassicApplication(
         if (
           ref.startsWith('.comet/') ||
           ref.split('/').includes('.comet') ||
-          ref.endsWith('/.comet.yaml')
+          isClassicStateFileName(path.posix.basename(ref))
         )
           return { allowed: false, reason: 'Classic Run、检查记录和状态投影由 Runtime 管理' };
         try {

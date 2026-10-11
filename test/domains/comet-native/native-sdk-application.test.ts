@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { fixtureAcceptanceReview } from '../../helpers/native-builder-acceptance-review.js';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -9,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { waitForCondition, waitForProcessExit } from '../../helpers/native-portable-process.js';
 import {
   nativeSdkCheckExecutor,
+  nativeSdkCurrentCheckSummaries,
   recoverNativeSdkChecks,
 } from '../../../domains/comet-native/native-sdk-checks.js';
 import {
@@ -251,7 +253,7 @@ async function preparedShape(
       ? createNativeSdkStateStore(fixtureData.root)
       : storeKind === 'file'
         ? createFileRuntimeStore<WorkflowRun>({
-            rootDir: path.join(fixtureData.root, '.comet', 'runtime', 'sdk-runs'),
+            rootDir: path.join(resolveWorkspaceRuntimeRootSync(fixtureData.root), 'sdk-runs'),
           })
         : createMemoryRuntimeStore<WorkflowRun>();
   const runtime = createRuntime({
@@ -1851,7 +1853,7 @@ children:
       const createSupervisorRuntime = () =>
         createRuntime({
           store: createFileRuntimeStore<WorkflowRun>({
-            rootDir: path.join(root, '.comet', 'runtime', 'sdk-runs', 'native'),
+            rootDir: path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs', 'native'),
           }),
           workflows: [application.workflow],
           transitionHandlers: [application.transitionHandler],
@@ -3497,10 +3499,25 @@ children:
       checks: Array<{ status: string; logRef: string }>;
     };
     expect(output.checks).toMatchObject([{ status: 'passed' }]);
-    expect(await fs.readFile(path.join(root, output.checks[0].logRef), 'utf8')).toContain(
-      'sdk-check-ok',
-    );
+    expect(
+      await fs.readFile(
+        path.join(resolveWorkspaceRuntimeRootSync(root), output.checks[0].logRef),
+        'utf8',
+      ),
+    ).toContain('sdk-check-ok');
     expect(run.actions.at(-1)).toMatchObject({ stepId: 'verify.verifier', type: 'handoff' });
+    // 旧日志引用只在访问本机存储时归一化，不改写已保存的执行回执。
+    const legacy = structuredClone(run);
+    const completedCheck = legacy.actions.find(
+      (action) => action.stepId === 'verify.checks' && action.status === 'succeeded',
+    )!;
+    const saved = completedCheck.outcome!.output as { checks: Array<{ logRef: string }> };
+    saved.checks[0].logRef = `.comet/runtime/${saved.checks[0].logRef}`;
+    const originalReceipt = JSON.stringify(completedCheck.outcome);
+    expect(await nativeSdkCurrentCheckSummaries({ run: legacy, projectRoot: root })).toMatchObject([
+      { status: 'passed' },
+    ]);
+    expect(JSON.stringify(completedCheck.outcome)).toBe(originalReceipt);
   });
 
   it('continues a healthy previous-definition Run without an upgrade or replacing its claim', async () => {
@@ -3565,7 +3582,10 @@ children:
       });
       expect(await store.read(run.runId)).toEqual(original);
       if (tampered) {
-        await fs.appendFile(path.join(root, logRef), 'receipt changed');
+        await fs.appendFile(
+          path.join(resolveWorkspaceRuntimeRootSync(root), logRef),
+          'receipt changed',
+        );
         await expect(inspectNativeSdkDefinitionUpgrade(root, run.runId, true)).rejects.toThrow(
           'log changed',
         );
@@ -3617,7 +3637,9 @@ children:
     };
     expect(failedAction).toMatchObject({ status: 'failed', attempt: 1 });
     expect(failedOutput.checks).toMatchObject([{ status: 'failed', exitCode: 1 }]);
-    const log = await fs.readFile(path.join(root, failedOutput.checks[0].logRef));
+    const log = await fs.readFile(
+      path.join(resolveWorkspaceRuntimeRootSync(root), failedOutput.checks[0].logRef),
+    );
     expect(log.toString()).toContain('controlled-check-failure');
     expect(createHash('sha256').update(log).digest('hex')).toBe(failedOutput.checks[0].logSha256);
     expect(failed).toMatchObject({
@@ -3752,7 +3774,11 @@ children:
     expect(run).toMatchObject({ status: 'completed', state: { archived: true, status: 'done' } });
     expect(run.waits.find((wait) => wait.id === shapeDecision.id)).toEqual(shapeDecision);
     expect(run.actions.find((action) => action.id === failedAction.id)).toEqual(failedAction);
-    expect(await fs.readFile(path.join(root, failedOutput.checks[0].logRef))).toEqual(log);
+    expect(
+      await fs.readFile(
+        path.join(resolveWorkspaceRuntimeRootSync(root), failedOutput.checks[0].logRef),
+      ),
+    ).toEqual(log);
   });
 
   it('recovers a real complete check receipt without running its side effect again', async () => {
@@ -3795,7 +3821,7 @@ children:
       claimed,
     );
     const log = path.join(
-      root,
+      resolveWorkspaceRuntimeRootSync(root),
       (result.output as { checks: Array<{ logRef: string }> }).checks[0].logRef,
     );
     const originalLog = await fs.readFile(log);
@@ -4527,7 +4553,7 @@ children:
     });
     const restarted = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(root, '.comet', 'runtime', 'sdk-runs'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs'),
       }),
       workflows: [application.workflow],
       transitionHandlers: [application.transitionHandler],
@@ -4590,7 +4616,7 @@ children:
     });
     const restarted = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(root, '.comet', 'runtime', 'sdk-runs'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs'),
       }),
       workflows: [application.workflow],
       transitionHandlers: [application.transitionHandler],
@@ -4660,7 +4686,7 @@ children:
     });
     const restarted = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(root, '.comet', 'runtime', 'sdk-runs'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs'),
       }),
       workflows: [application.workflow],
       transitionHandlers: [application.transitionHandler],
@@ -5335,7 +5361,10 @@ children:
     const checkOutput = run.outputs['verify.checks'].value as {
       checks: Array<{ logRef: string }>;
     };
-    await fs.appendFile(path.join(root, checkOutput.checks[0].logRef), 'tampered');
+    await fs.appendFile(
+      path.join(resolveWorkspaceRuntimeRootSync(root), checkOutput.checks[0].logRef),
+      'tampered',
+    );
     await expect(
       succeedLatestAction(
         runtime,

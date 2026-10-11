@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -59,7 +60,10 @@ describe('SDK ownership in shared project status', () => {
       schema: 'comet.native.sdk-status.v1',
       run: { id: 'native-demo', revision: 1 },
     });
-    const markerFile = path.join(root, '.comet/runtime/state-projections/native/native-demo.json');
+    const markerFile = path.join(
+      resolveWorkspaceRuntimeRootSync(root),
+      'state-projections/native/native-demo.json',
+    );
     const marker = JSON.parse(await fs.readFile(markerFile, 'utf8'));
     marker.revision = 9999;
     await fs.writeFile(markerFile, JSON.stringify(marker));
@@ -116,7 +120,9 @@ describe('SDK ownership in shared project status', () => {
     });
     expect(await snapshot(root)).toEqual(before);
 
-    await fs.rm(path.join(root, '.comet/runtime/sdk-runs/native'), { recursive: true });
+    await fs.rm(path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs/native'), {
+      recursive: true,
+    });
     const missing = await snapshot(root);
     const status = await inspectCometProjectStatus(root);
     expect(status.workflows.native.changes[0]).toMatchObject({

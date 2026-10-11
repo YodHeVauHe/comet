@@ -1,3 +1,11 @@
+import { hashRuntimeValue } from '../../../domains/engine/runtime.js';
+import { resolveClassicLocalTarget } from '../../../domains/comet-classic/classic-runtime-paths.js';
+import { parse, stringify } from 'yaml';
+import {
+  classicSdkCheckLogHash,
+  classicSdkCheckDirectoryRef,
+} from '../../../domains/comet-classic/classic-sdk-check-record.js';
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -449,7 +457,7 @@ describe('Classic SDK interrupted check recovery', () => {
       claim: { executorId: 'comet-classic-check', token: 'original-legacy-attempt' },
       command: null,
       record: { status: 'missing' },
-      evidence: { directory: 'openspec/changes/example/.comet/checks' },
+      evidence: { directory: classicSdkCheckDirectoryRef(run) },
       markUnknownRequest: {
         operation: 'mark-unknown',
         expectedRevision: claimed.revision,
@@ -483,6 +491,94 @@ describe('Classic SDK interrupted check recovery', () => {
 });
 
 describe('Classic SDK original execution receipts', () => {
+  it('uses only a matching committed portable check when the local log is missing', async () => {
+    const f = await fixture('tweak', false);
+    await f.cli('state', 'complete-build', 'example');
+    const { runtime, run } = await f.inspect();
+    const checked = await executeClassicSdkCommandCheck(runtime, {
+      runId: run.runId,
+      projectRoot: f.projectRoot,
+      argv: f.command('proof-boundary'),
+    });
+    const action = checked.actions.find(
+      (entry) => entry.ref === 'classic-check' && entry.status === 'succeeded',
+    )!;
+    const output = action.outcome!.output as { receiptRef: string; contentHash: string };
+    const local = (await resolveClassicLocalTarget(
+      f.projectRoot,
+      path.join(f.projectRoot, output.receiptRef),
+    ))!.target;
+    const stateFile = path.join(f.projectRoot, 'openspec/changes/example/comet-state.yaml');
+    const original = await fs.readFile(stateFile, 'utf8');
+    const validate = () =>
+      classicSdkCheckLogHash(
+        f.projectRoot,
+        checked,
+        action,
+        output.receiptRef,
+        output.contentHash,
+        'Portable check log',
+      );
+    await fs.writeFile(local, 'tampered log');
+    await expect(validate()).rejects.toThrow('changed');
+    await fs.unlink(local);
+    await fs.mkdir(local);
+    await expect(validate()).rejects.toThrow('real file');
+    await fs.rmdir(local);
+    await fs.symlink(stateFile, local);
+    await expect(validate()).rejects.toThrow();
+    await fs.unlink(local);
+    await expect(validate()).resolves.toBe(output.contentHash);
+    for (const mutation of ['hash', 'claim', 'future', 'marker'] as const) {
+      const document = parse(original);
+      const checkpoint = document.run_checkpoint;
+      if (mutation === 'hash') checkpoint.hash = '0'.repeat(64);
+      if (mutation === 'claim') {
+        checkpoint.run.actions.find(
+          (entry: { id: string }) => entry.id === action.id,
+        ).claim.executorId = 'other-executor';
+        checkpoint.hash = hashRuntimeValue(checkpoint.run);
+      }
+      if (mutation === 'future') checkpoint.sourceRevision = checked.revision + 1;
+      checkpoint.sourceHash = hashRuntimeValue({
+        hash: checkpoint.hash,
+        sourceRevision: checkpoint.sourceRevision,
+      });
+      await fs.writeFile(
+        stateFile,
+        (mutation === 'marker' ? '' : '# comet-execution: managed-run\n') + stringify(document),
+      );
+      await expect(validate(), mutation).rejects.toThrow();
+    }
+    await fs.writeFile(stateFile, original);
+    for (const changed of [
+      { ...action, attempt: action.attempt + 1 },
+      { ...action, status: 'unknown' as const },
+    ])
+      await expect(
+        classicSdkCheckLogHash(
+          f.projectRoot,
+          checked,
+          changed,
+          output.receiptRef,
+          output.contentHash,
+          'Portable check log',
+        ),
+      ).rejects.toThrow();
+    await fs.writeFile(path.join(f.projectRoot, 'source.js'), 'export const ready = false;\n');
+    const drifted = await f.invoke(
+      'guard',
+      'example',
+      'build',
+      '--apply',
+      '--',
+      ...f.command('proof-boundary'),
+    );
+    expect(drifted.exitCode).not.toBe(0);
+    expect(drifted.stdout).toContain('inputs changed');
+    expect(await fs.readFile(f.checkCount, 'utf8')).toBe('proof-boundary\n');
+  });
+
   it.each([false, true])(
     'keeps a previously committed successful check usable without new receipts (checkpoint recovery=%s)',
     async (cold) => {
@@ -499,12 +595,14 @@ describe('Classic SDK original execution receipts', () => {
       expect(checked.evidenceWaits?.at(-1)?.status).toBe('pending');
       if (cold) {
         await fs.rename(
-          path.join(f.projectRoot, '.comet/runtime'),
+          resolveWorkspaceRuntimeRootSync(f.projectRoot),
           path.join(path.dirname(f.projectRoot), 'committed-check-runtime'),
         );
         await f.cli('state', 'next', 'example');
       } else
-        await fs.rm(path.join(f.projectRoot, '.comet/runtime/check-receipts'), { recursive: true });
+        await fs.rm(path.join(resolveWorkspaceRuntimeRootSync(f.projectRoot), 'check-receipts'), {
+          recursive: true,
+        });
       const finished = await f.cli('guard', 'example', 'build', '--apply', '--', ...argv);
       expect(finished.phase).toBe('verify');
       expect(await fs.readFile(f.checkCount, 'utf8')).toBe('committed-success\n');
@@ -516,7 +614,7 @@ describe('Classic SDK original execution receipts', () => {
     const loseRuntime = async (label: string) => {
       const before = (await f.inspect()).run;
       await fs.rename(
-        path.join(f.projectRoot, '.comet/runtime'),
+        resolveWorkspaceRuntimeRootSync(f.projectRoot),
         path.join(path.dirname(f.projectRoot), label),
       );
       const next = await f.cli('state', 'next', 'example');
@@ -571,7 +669,10 @@ describe('Classic SDK original execution receipts', () => {
     const first = await f.invoke('state', 'check', 'example', 'build', '--recover');
     const originalRequest = first.response.data.recovery.recordOutcomeRequest;
     expect(originalRequest.outcome.status).toBe('failed');
-    const recoveryFile = path.join(f.projectRoot, first.response.data.recovery.record.ref);
+    const recoveryFile = (await resolveClassicLocalTarget(
+      f.projectRoot,
+      path.join(f.projectRoot, first.response.data.recovery.record.ref),
+    ))!.target;
     const record = JSON.parse(await fs.readFile(recoveryFile, 'utf8'));
     record.result.status = 'succeeded';
     record.result.output.exitCode = 0;
@@ -581,18 +682,29 @@ describe('Classic SDK original execution receipts', () => {
     }
     if (attack === 'old-claim') record.claim.token = 'earlier-attempt';
     if (attack === 'changed-receipt') {
-      const directory = path.join(f.projectRoot, '.comet/runtime/check-receipts/classic');
-      const [id] = await fs.readdir(directory);
-      const originalFile = path.join(directory, id, '0000000000000001.json');
+      const directory = path.join(
+        resolveWorkspaceRuntimeRootSync(f.projectRoot),
+        'check-receipts/classic',
+      );
+      const compact = path.join(directory, '.runtime-store-v2');
+      const [id] = await fs.readdir(compact);
+      const originalFile = path.join(compact, id, 'checkpoint.json');
       const receipt = JSON.parse(await fs.readFile(originalFile, 'utf8'));
-      receipt.result.status = 'succeeded';
-      receipt.result.output.exitCode = 0;
+      receipt.record.result.status = 'succeeded';
+      receipt.record.result.output.exitCode = 0;
+      receipt.hash = hashRuntimeValue({
+        record: receipt.record,
+        legacyRevision: receipt.legacyRevision,
+      });
       await fs.writeFile(originalFile, JSON.stringify(receipt));
     }
     if (attack === 'missing-receipt')
-      await fs.rm(path.join(f.projectRoot, '.comet/runtime/check-receipts/classic'), {
-        recursive: true,
-      });
+      await fs.rm(
+        path.join(resolveWorkspaceRuntimeRootSync(f.projectRoot), 'check-receipts/classic'),
+        {
+          recursive: true,
+        },
+      );
     await fs.writeFile(recoveryFile, JSON.stringify(record));
     const inspected = await f.invoke('state', 'check', 'example', 'build', '--recover');
     expect(inspected.response.data.recovery.record.status).toBe('invalid');

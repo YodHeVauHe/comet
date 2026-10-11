@@ -50,7 +50,7 @@ guard 的 `--apply` 在检查通过后更新状态。需要直接触发状态机
 
 ## 自动状态更新
 
-guard 支持 `--apply` 参数，验证通过后自动更新 `.comet.yaml` 状态字段：
+guard 支持 `--apply` 参数，验证通过后自动更新实际状态文件中的字段：
 
 ```bash
 comet guard <change-name> <phase> --apply
@@ -131,9 +131,9 @@ comet archive <change-name>
 
 ## 任务上下文与产物语言
 
-所有 OpenSpec 和 Superpowers 产物都必须使用 Comet 配置的产物语言，配置值为规范化语言 ID：`en` 或 `zh-CN`。已有 change 优先使用本次有效入口返回的 `configuration.language`；仅入口未提供该字段时，才通过 `comet state get <name> language` 读取 `<classic-change-dir>/.comet.yaml` 中的 `language`。`.comet.yaml` 尚不存在时，依次读取项目 `.comet/config.yaml` 和全局 `~/.comet/config.yaml` 的 `classic.language`；两处都没有配置时，才使用当前用户请求的语言。调用外部 OpenSpec/Superpowers Skill 时，必须把最终确定的语言明确写入提示词或 ARGUMENTS。
+所有 OpenSpec 和 Superpowers 产物都必须使用 Comet 配置的产物语言，配置值为规范化语言 ID：`en` 或 `zh-CN`。已有 change 优先使用本次有效入口返回的 `configuration.language`；仅入口未提供该字段时，才通过 `comet state get <name> language` 读取实际状态文件中的 `language`。新旧两种状态文件均不存在时，依次读取项目 `.comet/config.yaml` 和全局 `~/.comet/config.yaml` 的 `classic.language`；两处都没有配置时，才使用当前用户请求的语言。调用外部 OpenSpec/Superpowers Skill 时，必须把最终确定的语言明确写入提示词或 ARGUMENTS。
 
-绑定 Classic 工作区并读取 `.comet.yaml` 当前 `phase` 后，Agent 自动运行 `comet task <project-root> --task "<用户原始请求>" --phase "<phase>" --session "<本次任务稳定标识>" --json`。只将返回的 `text` 加入上下文。Context Manifest（`manifest` / `<context_manifest>`）是上下文清单，只包含摘要、选用原因和稳定 ID。需要正文、来源或验证方式时，运行同一命令并增加 `--expand-context "<id>"`。路径、操作或阶段发生变化时，沿用同一 `--session`，传入新的 `--path`、`--operation`、`--phase`，重新选择适用内容。
+绑定 Classic 工作区并读取实际状态文件当前 `phase` 后，Agent 自动运行 `comet task <project-root> --task "<用户原始请求>" --phase "<phase>" --session "<本次任务稳定标识>" --json`。只将返回的 `text` 加入上下文。Context Manifest（`manifest` / `<context_manifest>`）是上下文清单，只包含摘要、选用原因和稳定 ID。需要正文、来源或验证方式时，运行同一命令并增加 `--expand-context "<id>"`。路径、操作或阶段发生变化时，沿用同一 `--session`，传入新的 `--path`、`--operation`、`--phase`，重新选择适用内容。
 
 若 `<active_policies>` 中包含 `<verification command="...">`，将这些命令加入当前 Verify 的检查并记录实际结果。只有命令成功执行过，对应策略才能设为强制执行。
 

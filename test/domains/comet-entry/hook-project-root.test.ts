@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
@@ -76,6 +77,35 @@ describe('Comet Hook worktree project root', () => {
       }),
     ).resolves.toBe(path.resolve(secondary));
   });
+
+  it('attributes user-level Runtime to its linked worktree without requiring project config', async () => {
+    await fs.rm(path.join(secondary, '.comet/config.yaml'));
+    await expect(
+      resolveCometHookProjectRoot(primary, {
+        intent: 'write',
+        targets: [path.join(resolveWorkspaceRuntimeRootSync(secondary), 'native/state.json')],
+        toolName: 'Write',
+        cwd: secondary,
+      }),
+    ).resolves.toBe(path.resolve(secondary));
+  });
+
+  it.each(['runtime', 'project-subdirectory'])(
+    'attributes a relative Runtime target from a linked %s cwd without project config',
+    async (cwdKind) => {
+      await fs.rm(path.join(secondary, '.comet/config.yaml'));
+      const runtimeRoot = resolveWorkspaceRuntimeRootSync(secondary);
+      const cwd = cwdKind === 'runtime' ? runtimeRoot : path.join(secondary, 'nested');
+      await expect(
+        resolveCometHookProjectRoot(primary, {
+          intent: 'write',
+          targets: [path.relative(cwd, path.join(runtimeRoot, 'native/checkpoint.json'))],
+          toolName: 'Write',
+          cwd,
+        }),
+      ).resolves.toBe(path.resolve(secondary));
+    },
+  );
 
   it('keeps project-external targets neutral to worktree selection', async () => {
     await expect(

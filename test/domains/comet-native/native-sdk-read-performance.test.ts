@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -94,7 +95,11 @@ async function preparedChange(name = 'read-budget', existingRoot?: string) {
     runtime,
     prepared: prepared.data as Awaited<ReturnType<typeof inspectNativeSdkStatus>>,
     stateFile: path.join(changeDir, 'comet-state.yaml'),
-    markerFile: path.join(root, '.comet/runtime/state-projections/native', `${name}.json`),
+    markerFile: path.join(
+      resolveWorkspaceRuntimeRootSync(root),
+      'state-projections/native',
+      `${name}.json`,
+    ),
   };
 }
 
@@ -506,7 +511,7 @@ describe('Native SDK read work budgets', () => {
     const page = await listDiscoveredNativeStatusPage({ projectRoot: root });
     expect(page.total).toBe(1);
     expect(page.items[0]).toMatchObject({ schema: 'comet.native.sdk-status.v1', name });
-    const owners = path.join(root, '.comet/runtime/change-owners/native');
+    const owners = path.join(resolveWorkspaceRuntimeRootSync(root), 'change-owners/native');
     expect(reads.mock.calls.filter(([file]) => String(file) === owners)).toHaveLength(1);
   });
 
@@ -517,7 +522,9 @@ describe('Native SDK read work budgets', () => {
     const restoredMarker = await createNativeSdkStateStore(root).read(name);
     expect(restoredMarker?.revision).toBe(before.run.revision);
     expect(JSON.parse(await fs.readFile(markerFile, 'utf8')).revision).toBe(before.run.revision);
-    await fs.rm(path.join(root, '.comet/runtime/sdk-runs/native'), { recursive: true });
+    await fs.rm(path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs/native'), {
+      recursive: true,
+    });
     await fs.rm(markerFile);
     const recovered = await createNativeSdkStateStore(root).read(name);
     expect(recovered?.revision).toBe(before.run.revision);
@@ -602,7 +609,7 @@ describe('Native SDK read work budgets', () => {
       context: { requestId: 'read-budget-checks', projectRoot: root },
     });
     const output = run.outputs['verify.checks'].value as { checks: Array<{ logRef: string }> };
-    const logFile = path.join(root, output.checks[0].logRef);
+    const logFile = path.join(resolveWorkspaceRuntimeRootSync(root), output.checks[0].logRef);
     expect(opens.mock.calls.filter(([file]) => String(file) === logFile)).toHaveLength(1);
     expect((await fs.stat(logFile)).size).toBe(256 * 1024);
     await fs.appendFile(logFile, 'changed after execution');

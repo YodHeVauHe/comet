@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -149,12 +150,16 @@ describe('Classic public argument safety', () => {
       );
       expect(result.exitCode, result.stderr).toBe(0);
       expect(
-        await fs.readFile(path.join(root, 'openspec/changes', name, '.comet.yaml'), 'utf8'),
+        await fs.readFile(path.join(root, 'openspec/changes', name, 'comet-state.yaml'), 'utf8'),
       ).toContain('phase: open');
       expect(
         JSON.parse(
           await fs.readFile(
-            path.join(root, '.comet/runtime/change-owners/classic', `${name}.json`),
+            path.join(
+              resolveWorkspaceRuntimeRootSync(root),
+              'change-owners/classic',
+              `${name}.json`,
+            ),
             'utf8',
           ),
         ),
@@ -178,12 +183,16 @@ describe('Classic public argument safety', () => {
       const result = await classicStateCommand(['init', name, profile], options());
       expect(result.exitCode, result.stderr).toBe(0);
       expect(
-        await fs.readFile(path.join(root, 'openspec/changes', name, '.comet.yaml'), 'utf8'),
+        await fs.readFile(path.join(root, 'openspec/changes', name, 'comet-state.yaml'), 'utf8'),
       ).toContain('phase: open');
       expect(
         JSON.parse(
           await fs.readFile(
-            path.join(root, '.comet/runtime/change-owners/classic', `${name}.json`),
+            path.join(
+              resolveWorkspaceRuntimeRootSync(root),
+              'change-owners/classic',
+              `${name}.json`,
+            ),
             'utf8',
           ),
         ),
@@ -206,7 +215,10 @@ describe('Classic public argument safety', () => {
       expect(
         JSON.parse(
           await fs.readFile(
-            path.join(coordinator, '.comet/runtime/change-owners/classic/documents.json'),
+            path.join(
+              resolveWorkspaceRuntimeRootSync(coordinator),
+              'change-owners/classic/documents.json',
+            ),
             'utf8',
           ),
         ),
@@ -219,7 +231,10 @@ describe('Classic public argument safety', () => {
       expect(
         JSON.parse(
           await fs.readFile(
-            path.join(coordinator, '.comet/runtime/change-owners/classic/explicit-sdk.json'),
+            path.join(
+              resolveWorkspaceRuntimeRootSync(coordinator),
+              'change-owners/classic/explicit-sdk.json',
+            ),
             'utf8',
           ),
         ),
@@ -241,7 +256,7 @@ describe('Classic public argument safety', () => {
       run: { id: 'sdk-json', revision: 1, status: 'running' },
     });
     await expect(
-      fs.access(path.join(root, 'openspec/changes/sdk-json/.comet.yaml')),
+      fs.access(path.join(root, 'openspec/changes/sdk-json/comet-state.yaml')),
     ).resolves.toBeUndefined();
   });
 
@@ -261,7 +276,7 @@ describe('Classic public argument safety', () => {
     expect(workflow.stdout).toBe('hotfix\n');
     expect(plan.stdout).toBe('null\n');
     await expect(
-      fs.access(path.join(root, 'openspec/changes', name, '.comet.yaml')),
+      fs.access(path.join(root, 'openspec/changes', name, 'comet-state.yaml')),
     ).resolves.toBeUndefined();
   });
 
@@ -279,7 +294,7 @@ describe('Classic public argument safety', () => {
     expect(current.exitCode, current.stderr).toBe(0);
     expect(current.stdout).toBe(`${name}\n`);
     await expect(
-      fs.access(path.join(root, 'openspec/changes', name, '.comet.yaml')),
+      fs.access(path.join(root, 'openspec/changes', name, 'comet-state.yaml')),
     ).resolves.toBeUndefined();
   });
 
@@ -304,7 +319,7 @@ describe('Classic public argument safety', () => {
     const complete = await classicStateCommand(['artifacts', name], options());
     expect(complete.exitCode, complete.stderr).toBe(0);
     expect(complete.stdout).toContain('dependency closure is ready');
-    await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
   });
 
   it('advances Classic SDK full Open only with the artifact hash shown for approval', async () => {
@@ -342,7 +357,7 @@ describe('Classic public argument safety', () => {
     });
     const phase = await classicStateCommand(['get', name, 'phase'], options());
     expect(phase.stdout).toBe('design\n');
-    await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
   });
 
   it('records a Classic SDK Design proposal with a source-traceable handoff', async () => {
@@ -420,7 +435,7 @@ describe('Classic public argument safety', () => {
         }),
       ]),
     );
-    await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
     const proposalHash = (proposed.data as { wait: { proposalHash: string } }).wait.proposalHash;
     const stale = await classicStateCommand(
       ['decide-design', name, '--proposal-hash', '0'.repeat(64), '--choice', 'rejected'],
@@ -523,7 +538,7 @@ describe('Classic public argument safety', () => {
       nextAction: { kind: 'action', stepId: 'full.build.configure' },
     });
     expect((await classicStateCommand(['get', name, 'phase'], options())).stdout).toBe('build\n');
-    await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
   });
 
   it('keeps Classic SDK Build configuration pending until the current proposal is approved', async () => {
@@ -696,7 +711,7 @@ describe('Classic public argument safety', () => {
     ).toMatchObject({
       nextAction: { kind: 'action', stepId: 'full.build.plan' },
     });
-    await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
   });
 
   it('advances a Classic SDK Build through plan pause and completed implementation without replaying planning', async () => {
@@ -1072,7 +1087,7 @@ describe('Classic public argument safety', () => {
         phase: 'verify',
         nextAction: { kind: 'action', stepId: 'full.verify.run' },
       });
-      await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
     },
   );
 
@@ -1180,7 +1195,7 @@ describe('Classic public argument safety', () => {
         phase: 'archive',
         nextAction: { kind: 'action', stepId: `${profile}.archive.prepare` },
       });
-      await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
     },
   );
 
@@ -1272,7 +1287,7 @@ describe('Classic public argument safety', () => {
     expect(phase.stdout).toBe('build\n');
     const design = await classicStateCommand(['get', name, 'design_doc'], options());
     expect(design.stdout).toBe(`${designRef}\n`);
-    await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
   });
 
   it('keeps Classic SDK Design pending when OpenSpec changes after the proposal', async () => {
@@ -1440,7 +1455,7 @@ describe('Classic public argument safety', () => {
     expect(design.exitCode).not.toBe(0);
     expect(design.data).toMatchObject({ checks: { blocked: true } });
     await expect(
-      fs.access(path.join(root, 'openspec/changes', name, '.comet.yaml')),
+      fs.access(path.join(root, 'openspec/changes', name, 'comet-state.yaml')),
     ).resolves.toBeUndefined();
   });
 
@@ -1518,7 +1533,7 @@ describe('Classic public argument safety', () => {
       recovery: { claim: { executorId: 'classic-host', token: 'recover-claimed' } },
     });
     await expect(
-      fs.access(path.join(root, 'openspec/changes', name, '.comet.yaml')),
+      fs.access(path.join(root, 'openspec/changes', name, 'comet-state.yaml')),
     ).resolves.toBeUndefined();
   });
 
@@ -1702,7 +1717,7 @@ describe('Classic public argument safety', () => {
       nextAction: { kind: 'action', stepId: 'full.design.handoff' },
     });
     expect((await runtime.inspect(name)).runId).toBe(name);
-    await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
     const designProposal = await classicStateCommand(
       ['propose-design', name, '--proposal', 'Design the required public API'],
       { ...options(), json: true },

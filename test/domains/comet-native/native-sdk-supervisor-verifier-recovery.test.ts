@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { sourceHooks } from '../../helpers/native-source-loader.mjs';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -257,7 +258,7 @@ describe('Supervisor Child Verifier execution failure', () => {
     const run = await failVerifier(f);
     const check = run.actions.find((action) => action.stepId === 'supervisor.child.checks')!;
     const log = (check.outcome!.output as { checks: Array<{ logRef: string }> }).checks[0].logRef;
-    await fs.appendFile(path.join(f.projectRoot, log), 'tampered');
+    await fs.appendFile(path.join(resolveWorkspaceRuntimeRootSync(f.projectRoot), log), 'tampered');
     await expect(decide(f, run, 'retry-verifier')).rejects.toThrow('log changed');
     expect(await f.dispatch({ operation: 'inspect', runId: f.name })).toEqual(run);
   });
@@ -556,7 +557,9 @@ describe('fixed older custom Supervisor Runs', () => {
 
   it('restores a checkpoint-only old fixed application on the first writable load while read-only inspection stays unchanged', async () => {
     const f = await oldCustomFixture();
-    await fs.rm(path.join(f.projectRoot, '.comet/runtime/applications'), { recursive: true });
+    await fs.rm(path.join(resolveWorkspaceRuntimeRootSync(f.projectRoot), 'applications'), {
+      recursive: true,
+    });
     await expect(
       (async () => {
         const loaded = await loadOwnedNativeSdkRuntime(f.projectRoot, f.name, { readOnly: true });
@@ -591,7 +594,7 @@ describe('fixed older custom Supervisor Runs', () => {
         const check = f.run.actions.find((action) => action.stepId === 'supervisor.child.checks')!;
         await fs.appendFile(
           path.join(
-            f.projectRoot,
+            resolveWorkspaceRuntimeRootSync(f.projectRoot),
             (check.outcome!.output as { checks: Array<{ logRef: string }> }).checks[0].logRef,
           ),
           'tampered',

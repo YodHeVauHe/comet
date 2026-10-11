@@ -10,7 +10,7 @@ Consult this project file-structure reference as needed; do not load it wholesal
 ├── changes/
 │   ├── <name>/                        # Active change
 │   │   ├── .openspec.yaml
-│   │   ├── .comet.yaml
+│   │   ├── comet-state.yaml
 │   │   ├── proposal.md                # Motivation, goals, and scope
 │   │   ├── design.md                  # High-level architecture decisions
 │   │   ├── specs/<capability>/spec.md # Incremental capability specification changes (delta spec)
@@ -26,3 +26,5 @@ Consult this project file-structure reference as needed; do not load it wholesal
 .comet/
 └── config.yaml                        # Comet project configuration (context_compression defaults to off; beta is optional)
 ```
+
+New Classic SDK changes use `comet-state.yaml`; historical `.comet.yaml` files remain supported in place, and compat initialization still uses the old name. Both names must not coexist, including when one is a dangling symlink.

@@ -48,6 +48,10 @@ import {
 } from '../../platform/install/project-registry.js';
 import { resolveCanonicalSkillRootOwners } from '../../platform/install/skill-root-owner.js';
 import type { InstallScope } from '../../platform/install/types.js';
+import {
+  CLASSIC_STATE_FILE,
+  resolveClassicStateFile,
+} from '../../domains/comet-classic/classic-state-file.js';
 import { inspectClassicChangeReadOnly } from '../../domains/comet-classic/classic-diagnostics.js';
 import {
   inspectClassicLayout,
@@ -1111,7 +1115,7 @@ async function checkCometYamlValidity(projectPath: string): Promise<CheckResult[
   for (const entry of entries) {
     if (entry === 'archive') continue;
     const changeDir = path.join(changesDir, entry);
-    const yamlPath = path.join(changeDir, '.comet.yaml');
+    let yamlPath = path.join(changeDir, CLASSIC_STATE_FILE);
     const runtimePath = path.join(changeDir, '.comet');
     try {
       const changeInspection = await inspectProtectedProjectPath(
@@ -1123,10 +1127,11 @@ async function checkCometYamlValidity(projectPath: string): Promise<CheckResult[
         },
       );
       if (!changeInspection.exists) continue;
+      yamlPath = await resolveClassicStateFile(changeDir);
       const sdk = await inspectClassicSdkChangeStatus(projectPath, entry);
       if (sdk) {
         results.push({
-          check: `.comet.yaml: ${entry}`,
+          check: `${path.basename(yamlPath)}: ${entry}`,
           status: 'pass',
           message: `valid (step: ${sdk.currentStep ?? 'completed'}, mode: sdk)`,
         });
@@ -1151,7 +1156,7 @@ async function checkCometYamlValidity(projectPath: string): Promise<CheckResult[
       );
     } catch (error) {
       results.push({
-        check: `.comet.yaml: ${entry}`,
+        check: `${path.basename(yamlPath)}: ${entry}`,
         status: 'fail',
         message: error instanceof Error ? error.message : String(error),
       });
@@ -1164,7 +1169,7 @@ async function checkCometYamlValidity(projectPath: string): Promise<CheckResult[
         diagnostic.currentStep ??
         (diagnostic.runtimeMode === 'legacy-state' ? `legacy:${diagnostic.phase}` : 'completed');
       results.push({
-        check: `.comet.yaml: ${entry}`,
+        check: `${path.basename(yamlPath)}: ${entry}`,
         status: 'pass',
         message: `valid (step: ${step}, mode: ${diagnostic.runtimeMode})`,
       });
@@ -1182,14 +1187,14 @@ async function checkCometYamlValidity(projectPath: string): Promise<CheckResult[
     }
 
     results.push({
-      check: `.comet.yaml: ${entry}`,
+      check: `${path.basename(yamlPath)}: ${entry}`,
       status: 'fail',
       message: diagnostic.error ?? 'invalid Classic state',
     });
     results.push({
       check: `next: ${entry}`,
       status: 'warn',
-      message: 'inspect .comet.yaml and rerun comet doctor',
+      message: `inspect ${path.basename(yamlPath)} and rerun comet doctor`,
     });
   }
 

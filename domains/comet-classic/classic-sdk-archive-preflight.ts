@@ -1,3 +1,4 @@
+import { classicSdkCheckLogHash } from './classic-sdk-check-record.js';
 import { randomUUID } from 'node:crypto';
 import { classicSdkRunMatchesProfile } from './classic-sdk-profile.js';
 import { execFileSync } from 'node:child_process';
@@ -168,12 +169,14 @@ export async function assertVerifyEvidenceCurrent(
   if (report.digest !== reportReceipt.contentHash) {
     throw new Error('Classic Archive Verify report changed');
   }
-  const log = await hashProtectedProjectFile(projectRoot, checkReceipt.ref, {
-    label: 'Classic Archive Verify check log',
-  });
-  if (log.digest !== checkReceipt.contentHash) {
-    throw new Error('Classic Archive Verify check log changed');
-  }
+  await classicSdkCheckLogHash(
+    projectRoot,
+    run,
+    checkAction,
+    checkReceipt.ref,
+    checkReceipt.contentHash,
+    'Classic Archive Verify check log',
+  );
   const change = await inspectProtectedProjectPath(projectRoot, changeDirRef, {
     label: 'Classic Archive change',
     expected: 'directory',

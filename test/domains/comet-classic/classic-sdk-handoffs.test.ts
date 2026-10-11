@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -247,7 +248,7 @@ describe('Classic SDK profile-aware handoffs', () => {
       const original = (await inspectClassicSdkRun(root, 'demo')).run;
       // 从便携检查点恢复旧的 comet-build 引用，保留既有 Action 句柄。
       const copied = await fixture(profile);
-      await fs.rm(path.join(copied.root, '.comet/runtime'), { recursive: true, force: true });
+      await fs.rm(resolveWorkspaceRuntimeRootSync(copied.root), { recursive: true, force: true });
       await fs.cp(changeDir, copied.changeDir, { recursive: true });
       const resumed = await copied.cli('state', 'select', 'demo');
       expect(resumed.exitCode, resumed.stderr).toBe(0);

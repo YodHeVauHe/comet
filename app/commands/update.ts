@@ -1402,7 +1402,7 @@ async function updateSingleProject(
       true,
       classicProject,
     );
-    if (nativeProject) await ensureCometProjectGitignore(projectPath);
+    if (nativeProject || classicProject) await ensureCometProjectGitignore(projectPath);
     log(`  ${t(lang, 'configMerged')}`);
   };
 
@@ -2010,7 +2010,7 @@ async function updateSingleProject(
         true,
         classicProject,
       );
-      if (nativeProject) await ensureCometProjectGitignore(configRoot);
+      if (nativeProject || classicProject) await ensureCometProjectGitignore(configRoot);
     }
     if (scope === 'project' && classicLayoutInitializationPermit) {
       await completeClassicLayoutInitialization(projectPath, classicLayoutInitializationPermit);

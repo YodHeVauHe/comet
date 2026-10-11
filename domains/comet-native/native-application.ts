@@ -242,8 +242,8 @@ export function createNativeWorkflowApplication(
               const receipt = JSON.parse(
                 (
                   await readProtectedProjectFile(
-                    context.projectRoot,
-                    `.comet/runtime/transfers/native/${state.name}.json`,
+                    paths.workspaceRuntimeRoot,
+                    `transfers/native/${state.name}.json`,
                     1024 * 1024,
                     { label: 'Native 转移回执' },
                   )

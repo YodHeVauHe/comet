@@ -1,3 +1,4 @@
+import { resolveClassicRunDirectory } from '../../../domains/comet-classic/classic-runtime-paths.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -135,10 +136,10 @@ describe('Classic handoff material reuse', () => {
     expect(rejected.exitCode).not.toBe(0);
     expect(rejected.stderr).toContain('handoff sources changed before completion');
     expect((await readClassicState(changeDir)).classic?.handoffHash).toBeNull();
-    expect((await readRunState(changeDir))?.pending).toBeNull();
+    expect((await readRunState(await resolveClassicRunDirectory(changeDir)))?.pending).toBeNull();
     const retried = await run(['handoff', 'demo', 'design', '--write']);
     expect(retried.exitCode, retried.stderr).toBe(0);
-    expect((await readRunState(changeDir))?.pending).toBeNull();
+    expect((await readRunState(await resolveClassicRunDirectory(changeDir)))?.pending).toBeNull();
     expect((await readClassicState(changeDir)).classic?.handoffHash).toBe(
       await computeContextHash(root, changeDir, 'openspec/changes/demo'),
     );

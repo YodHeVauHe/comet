@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -91,9 +92,7 @@ describe('Native capability association during change creation', () => {
     await expect(
       fs.access(
         path.join(
-          root,
-          '.comet',
-          'runtime',
+          resolveWorkspaceRuntimeRootSync(root),
           'native',
           'changes',
           'retire-auth',
@@ -301,7 +300,11 @@ describe('Native capability association during change creation', () => {
       root,
     );
     expect(first.exitCode).toBe(0);
-    const cache = path.join(root, '.comet', 'runtime', 'native', 'capability-discovery-cache.json');
+    const cache = path.join(
+      resolveWorkspaceRuntimeRootSync(root),
+      'native',
+      'capability-discovery-cache.json',
+    );
     await expect(fs.readFile(cache, 'utf8')).resolves.toContain('comet.native.capability-cache.v1');
 
     const firstMtime = (await fs.stat(cache)).mtimeMs;
@@ -309,10 +312,13 @@ describe('Native capability association during change creation', () => {
       recursive: true,
       force: true,
     });
-    await fs.rm(path.join(root, '.comet', 'runtime', 'native', 'changes', 'extend-auth'), {
-      recursive: true,
-      force: true,
-    });
+    await fs.rm(
+      path.join(resolveWorkspaceRuntimeRootSync(root), 'native', 'changes', 'extend-auth'),
+      {
+        recursive: true,
+        force: true,
+      },
+    );
     const second = await nativeNewCommand(
       ['extend-auth-again', '--task', task, '--runtime', 'compat'],
       root,
@@ -354,10 +360,13 @@ describe('Native capability association during change creation', () => {
       recursive: true,
       force: true,
     });
-    await fs.rm(path.join(root, '.comet', 'runtime', 'native', 'changes', 'extend-auth'), {
-      recursive: true,
-      force: true,
-    });
+    await fs.rm(
+      path.join(resolveWorkspaceRuntimeRootSync(root), 'native', 'changes', 'extend-auth'),
+      {
+        recursive: true,
+        force: true,
+      },
+    );
 
     const second = await nativeNewCommand(
       ['extend-auth-again', '--task', task, '--runtime', 'compat'],

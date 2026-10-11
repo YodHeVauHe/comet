@@ -9,9 +9,11 @@ description: '归档并交付 Classic change。在用户调用 /comet-archive，
 
 ## SDK Run 路径
 
+SDK 新 change 的状态文件为 `comet-state.yaml`；历史 `.comet.yaml` 保持原地读写，compat 初始化仍用旧名。两文件共存时（包括其中一个是失效符号链接）停止并保留现场，不自动改名或覆盖。以 Runtime 返回的归属与路径为准。
+
 响应已有 `agent.continuation.mode` 时，先按 `comet-classic/reference/auto-transition.md` 处理；`wait` 等待原任务，不能因兼容字段 `nextAction.kind: reconcile` 再做恢复查询。使用当前响应的命令与输入；Skill 工作实际完成后才使用 `completion` 提交。下文依据 `nextAction.kind` 的恢复规则仅用于没有 `mode` 的旧响应。
 
-优先复用同一 change、工作区和 Run 的最新有效响应中的 `agent.continuation`、`data.nextAction`、phase、revision 和路径摘要。只有冷恢复、工作区或外部状态变化、响应版本已过期或缺少当前步骤必要信息时，才运行 `comet state next <change-name> --json`；不要因加载下一 Skill 再读一次。后续写操作仍由 Runtime 校验当前版本与证据，不能用缓存跳过检查或批准。确认 `data.runtimeFormat: sdk`、phase 和 `nextAction.kind`，在已绑定的 `projectRoot` 执行；路径缺失或绑定发生变化时才运行 `comet classic workspace resolve <change-name> --json`。SDK Run 的 Verify 收据必须仍有效；`.comet.yaml` 和验证报告存在并不表示已获归档授权。`reconcile` 时运行 `comet state check <change-name> archive --recover --json` 核对原 Action 与磁盘、Git 证据，结果未明时不重做归档、提交、push 或 PR。
+优先复用同一 change、工作区和 Run 的最新有效响应中的 `agent.continuation`、`data.nextAction`、phase、revision 和路径摘要。只有冷恢复、工作区或外部状态变化、响应版本已过期或缺少当前步骤必要信息时，才运行 `comet state next <change-name> --json`；不要因加载下一 Skill 再读一次。后续写操作仍由 Runtime 校验当前版本与证据，不能用缓存跳过检查或批准。确认 `data.runtimeFormat: sdk`、phase 和 `nextAction.kind`，在已绑定的 `projectRoot` 执行；路径缺失或绑定发生变化时才运行 `comet classic workspace resolve <change-name> --json`。SDK Run 的 Verify 收据必须仍有效；状态文件和验证报告存在并不表示已获归档授权。`reconcile` 时运行 `comet state check <change-name> archive --recover --json` 核对原 Action 与磁盘、Git 证据，结果未明时不重做归档、提交、push 或 PR。
 
 1. 复用当前有效的状态、工作区和证据摘要；缺少时运行 `comet state check <change-name> archive --json`。按下文 Step 1 核对验证结论、当前绑定分支、归档影响和无关改动。需要推送或 PR 时，先确认 remote 和 PR base；多个可选目标不能猜测。用当前目标与效果摘要运行 `comet state propose-archive <change-name> --summary "<delivery-summary>"`，需要时附 `--remote <name>`、`--pr-base <branch>`。保存返回的 `data.wait.proposalHash` 为 `<proposalHash>`；恢复已有待决定 Wait 时复用它，不重复提案。
 2. 按 decision-point.md 展示当前提案及下文 Step 1 的 A–E 影响，并等待用户明确选择。用 `comet state decide-archive <change-name> --proposal-hash <proposalHash> --choice <local|push|pr|reverify|later>` 提交选择。A、B、C 分别对应 `local`、`push`、`pr`；D 对应 `reverify` 并回到 Verify；E 对应 `later`，本次停止。目标或 Verify 证据改变时，重新核对并取得新的决定；旧提案哈希不能继续使用。

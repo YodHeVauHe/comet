@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
@@ -39,8 +40,11 @@ async function fixture(custom = false) {
   execFileSync('git', ['init', '-b', 'main'], { cwd: root, stdio: 'ignore' });
   const name = 'demo';
   const changeDir = path.join(root, 'openspec/changes/demo');
-  const stateFile = path.join(changeDir, '.comet.yaml');
-  const markerFile = path.join(root, '.comet/runtime/state-projections/classic/demo.json');
+  const stateFile = path.join(changeDir, 'comet-state.yaml');
+  const markerFile = path.join(
+    resolveWorkspaceRuntimeRootSync(root),
+    'state-projections/classic/demo.json',
+  );
   const cli = (...args: string[]) =>
     withClassicCommandContext({ projectRoot: root, invocationCwd: root }, () =>
       runClassicCli(['state', ...args, '--json']),
@@ -104,14 +108,16 @@ async function fixture(custom = false) {
   }
   const run = await store.read(name);
   const raw = createFileRuntimeStore<WorkflowRun>({
-    rootDir: path.join(root, '.comet/runtime/sdk-runs/classic'),
+    rootDir: path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs/classic'),
   });
   const checkpoint = async () =>
     readPortableRunCheckpoint(parse(await fs.readFile(stateFile, 'utf8')).run_checkpoint, name, {
       preserveSourceRevision: true,
     })!;
   const loseRun = () =>
-    fs.rm(path.join(root, '.comet/runtime/sdk-runs/classic'), { recursive: true });
+    fs.rm(path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs/classic'), {
+      recursive: true,
+    });
   return {
     root,
     name,
@@ -140,8 +146,8 @@ describe('Classic trusted checkpoint recovery', () => {
       else
         await fs.rm(
           path.join(
-            f.root,
-            `.comet/runtime${missing === 'projection' ? '/state-projections' : ''}`,
+            resolveWorkspaceRuntimeRootSync(f.root),
+            missing === 'projection' ? 'state-projections' : '',
           ),
           { recursive: true },
         );
@@ -154,51 +160,96 @@ describe('Classic trusted checkpoint recovery', () => {
     },
   );
 
-  it('restores Build with its completed Open, evidence and pending Action intact', async () => {
+  it.each(['missing-store', 'replaced-git'])(
+    'restores Build with its completed Open, evidence and pending Action intact (%s)',
+    async (loss) => {
+      const f = await fixture();
+      for (const file of ['proposal.md', 'design.md', 'tasks.md'])
+        await fs.writeFile(
+          path.join(f.changeDir, file),
+          file === 'tasks.md' ? '- [ ] Implement the change\n' : `# ${file}\n`,
+        );
+      const action = f.run.actions[0];
+      await f.runtime.claim({
+        runId: f.name,
+        actionId: action.id,
+        attempt: action.attempt,
+        inputHash: action.inputHash,
+        executorId: 'classic-host',
+        claimToken: 'open-claim',
+      });
+      let run = await f.runtime.recordOutcome({
+        runId: f.name,
+        outcome: {
+          actionId: action.id,
+          attempt: action.attempt,
+          inputHash: action.inputHash,
+          claimToken: 'open-claim',
+          outcomeId: 'open-result',
+          status: 'succeeded',
+          output: { event: 'open-complete' },
+        },
+      });
+      run = await f.runtime.recordEvidence({
+        runId: f.name,
+        evidenceId: run.evidenceWaits![0].id,
+        kind: 'classic-open-artifacts',
+        ...(await classicOpenEvidenceReceipt(f.root, 'openspec/changes/demo')),
+        submissionId: 'open-evidence',
+        expectedRevision: run.revision,
+        context: { requestId: 'open-evidence', projectRoot: f.root },
+      });
+      expect(run.state).toMatchObject({ phase: 'build' });
+      const saved = await f.checkpoint();
+      const original = await f.raw.read(f.name);
+      if (loss === 'missing-store') await f.loseRun();
+      else {
+        const backup = `${f.root}-git-backup`;
+        roots.push(backup);
+        await fs.rename(path.join(f.root, '.git'), backup);
+        execFileSync('git', ['init', '-b', 'main'], { cwd: f.root, stdio: 'ignore' });
+        await expect(f.store.read(f.name)).rejects.toThrow('workspace identity changed');
+        await expect(
+          f.store.compareAndSwap(f.name, original!.revision, {
+            ...original!,
+            revision: original!.revision + 1,
+          }),
+        ).rejects.toThrow('workspace identity changed');
+        expect(await f.raw.read(f.name)).toEqual(original);
+      }
+      const recovered = await createClassicSdkStateStore(f.root).read(f.name);
+      expect(recovered).toEqual(saved);
+      expect(recovered!.actions.map((item) => item.id)).toEqual(run.actions.map((item) => item.id));
+      expect((await f.cli('next', f.name)).exitCode).toBe(0);
+    },
+  );
+
+  it('keeps an in-flight claim unknown after replacing Git identity and never rewrites the old store', async () => {
     const f = await fixture();
-    for (const file of ['proposal.md', 'design.md', 'tasks.md'])
-      await fs.writeFile(
-        path.join(f.changeDir, file),
-        file === 'tasks.md' ? '- [ ] Implement the change\n' : `# ${file}\n`,
-      );
     const action = f.run.actions[0];
-    await f.runtime.claim({
+    const claimed = await f.runtime.claim({
       runId: f.name,
       actionId: action.id,
       attempt: action.attempt,
       inputHash: action.inputHash,
       executorId: 'classic-host',
-      claimToken: 'open-claim',
+      claimToken: 'interrupted-before-git-replacement',
     });
-    let run = await f.runtime.recordOutcome({
-      runId: f.name,
-      outcome: {
-        actionId: action.id,
-        attempt: action.attempt,
-        inputHash: action.inputHash,
-        claimToken: 'open-claim',
-        outcomeId: 'open-result',
-        status: 'succeeded',
-        output: { event: 'open-complete' },
-      },
+    const original = await f.raw.read(f.name);
+    const backup = `${f.root}-git-backup`;
+    roots.push(backup);
+    await fs.rename(path.join(f.root, '.git'), backup);
+    execFileSync('git', ['init', '-b', 'main'], { cwd: f.root, stdio: 'ignore' });
+    await expect(f.store.read(f.name)).rejects.toThrow('workspace identity changed');
+    const recovered = await createClassicSdkStateStore(f.root).read(f.name);
+    expect(recovered!.revision).toBe(claimed.revision);
+    expect(recovered!.actions[0]).toMatchObject({
+      id: action.id,
+      attempt: action.attempt,
+      status: 'unknown',
     });
-    run = await f.runtime.recordEvidence({
-      runId: f.name,
-      evidenceId: run.evidenceWaits![0].id,
-      kind: 'classic-open-artifacts',
-      ...(await classicOpenEvidenceReceipt(f.root, 'openspec/changes/demo')),
-      submissionId: 'open-evidence',
-      expectedRevision: run.revision,
-      context: { requestId: 'open-evidence', projectRoot: f.root },
-    });
-    expect(run.state).toMatchObject({ phase: 'build' });
-    const saved = await f.checkpoint();
-    await f.loseRun();
-    expect(await createClassicSdkStateStore(f.root).read(f.name)).toEqual(saved);
-    expect((await f.raw.read(f.name))!.actions.map((item) => item.id)).toEqual(
-      run.actions.map((item) => item.id),
-    );
-    expect((await f.cli('next', f.name)).exitCode).toBe(0);
+    expect(recovered!.actions).toHaveLength(claimed.actions.length);
+    expect(await f.raw.read(f.name)).toEqual(original);
   });
 
   it.each([false, true])(

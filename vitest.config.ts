@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    setupFiles: ['test/helpers/runtime-home.ts'],
     testTimeout: 120_000,
     // Git-heavy fixtures can exceed Vitest's 10s hook default under bounded full-suite concurrency.
     hookTimeout: 120_000,

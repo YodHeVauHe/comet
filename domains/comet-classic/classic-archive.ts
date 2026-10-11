@@ -1,3 +1,4 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
 import { classicSdkEntryData } from './classic-sdk-output.js';
 import { createHash } from 'crypto';
 import { annotatedMarkdown } from './classic-archive-annotation.js';
@@ -38,7 +39,7 @@ import {
   writeArtifacts,
   writeCheckpoint,
   writePendingAction,
-} from '../../domains/engine/run-store.js';
+} from './classic-run-store.js';
 import type { Checkpoint, EngineAction, RunState } from '../../domains/engine/types.js';
 import { assertClassicLayoutWritable, classicProjectRelative } from './classic-layout.js';
 import {
@@ -357,10 +358,14 @@ export const classicArchiveCommand: ClassicCommandHandler = withProjectContext(a
     const changeDir = activeExists ? activeDir : recoveredArchive?.directory;
     if (
       !changeDir ||
-      !(await classicProjectTargetExists(layout.projectRoot, `${changeDir}/.comet.yaml`, {
-        label: `Classic change ${change} state`,
-        expected: 'file',
-      }))
+      !(await classicProjectTargetExists(
+        layout.projectRoot,
+        await resolveClassicStateFile(changeDir),
+        {
+          label: `Classic change ${change} state`,
+          expected: 'file',
+        },
+      ))
     ) {
       throw new ArchiveFailure(red(`FATAL: .comet.yaml not found in ${activeRef}/`));
     }

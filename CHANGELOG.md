@@ -20,7 +20,8 @@ All notable changes to @rpamis/comet will be documented in this file.
 
 ### Changed
 
-- **New workflow Runtime**: New Native and Classic changes use the resumable SDK Runtime by default while retaining their familiar state files; non-Git Classic coordination roots retain the compatible Runtime for document-only archives. Classic archives preserve valid references to documents moved with the change. Existing changes continue on their original Runtime; use `--runtime compat` when creating a change to select the previous Runtime explicitly.
+- **Local Runtime storage**: Keep Native and Classic machine-local execution state in the user Comet data directory, isolated by checkout and worktree. Validate existing state before switching storage, preserve portable workflow documents, and compact SDK Run history into an atomic current checkpoint without resetting progress. Archive publication uses short-lived ignored staging on the target volume.
+- **New workflow Runtime**: New Native and Classic changes use the resumable SDK Runtime by default and create `comet-state.yaml`. Classic continues to read and update historical `.comet.yaml` files in place, and rejects changes containing both names; non-Git Classic coordination roots retain the compatible Runtime for document-only archives. Classic archives preserve valid references to documents moved with the change. Existing changes continue on their original Runtime; use `--runtime compat` when creating a change to select the previous Runtime explicitly.
 - **Workflow recovery**: Recover copied Native and Classic SDK changes from their saved checkpoints, preserving progress and approvals. Resume failed work or revise requirements in the same workflow while retaining partial code; changed requirements need fresh approval, and uncertain executions must be reconciled before retrying.
 - **Native Supervisor archives**: Completed child tasks retain accessible archive records with their requirements, source references, and verification results. Archive delivery incorporates checked target-branch updates, cleans up verified temporary branches and worktrees, and can resume interrupted delivery or cleanup while preserving dirty or unintegrated work.
 - **Dashboard workflow progress**: Show current Native and child-task progress for SDK workflows, refresh status as work advances, and report unreadable workflow records. Project status and Doctor also identify selected standalone applications.
@@ -31,6 +32,7 @@ All notable changes to @rpamis/comet will be documented in this file.
 
 ### Fixed
 
+- **Classic update ignores**: Restore missing local-state ignore rules when updating Classic-only projects, keeping portable configuration trackable.
 - **Dashboard project memory details**: Keep loaded content visible during background updates, avoid repeated reads when the selected memory is unchanged, and align loading placeholders with the detail pane padding.
 - **Windows Eval inputs**: Pass Claude Code and Codex evaluation prompts through temporary files and stdin so complete Skill and SDK application inputs are preserved without exceeding command-line limits or altering backslashes and newlines.
 - **Eval user simulation**: Give custom user simulators the complete task scenario and current question so approval, rejection, and recovery decisions follow the requested case.

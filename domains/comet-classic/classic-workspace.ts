@@ -1,3 +1,4 @@
+import { resolveClassicStateFile, ClassicStateFileConflictError } from './classic-state-file.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseDocument } from 'yaml';
@@ -397,12 +398,13 @@ async function readCandidate(
   worktree: GitWorktreeEntry | null,
   name: string,
 ): Promise<ClassicWorkspaceCandidate | null> {
-  if (await readSdkChangeOwner(projectRoot, 'classic', name)) return null;
+  if (await readSdkChangeOwner(projectRoot, 'classic', name, { readOnly: true })) return null;
   let changeDirectory: string | null = null;
   try {
     const active = await inspectClassicActiveChangeDirectory(name, projectRoot);
     if (active.stateExists) changeDirectory = active.directory;
-  } catch {
+  } catch (error) {
+    if (error instanceof ClassicStateFileConflictError) throw error;
     // An invalid active copy should not hide a valid archived pending-delivery copy.
   }
   if (changeDirectory === null) {
@@ -411,14 +413,15 @@ async function readCandidate(
     let archivedDocument;
     try {
       archivedDocument = parseDocument(
-        await fs.readFile(path.join(archived.directory, '.comet.yaml'), 'utf8'),
+        await fs.readFile(await resolveClassicStateFile(archived.directory), 'utf8'),
       );
       const archivedRecord = (archivedDocument.toJS() ?? {}) as Record<string, unknown>;
       if (archivedRecord.archived !== true) return null;
       const delivery = await readClassicDelivery(projectRoot, archived.directory);
       if (['complete', 'local-verified'].includes(delivery.verification.status)) return null;
       changeDirectory = archived.directory;
-    } catch {
+    } catch (error) {
+      if (error instanceof ClassicStateFileConflictError) throw error;
       return null;
     }
   }
@@ -427,9 +430,10 @@ async function readCandidate(
   let document;
   try {
     document = parseDocument(
-      await fs.readFile(path.join(candidateDirectory, '.comet.yaml'), 'utf8'),
+      await fs.readFile(await resolveClassicStateFile(candidateDirectory), 'utf8'),
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof ClassicStateFileConflictError) throw error;
     return null;
   }
   const record = (document.toJS() ?? {}) as Record<string, unknown>;

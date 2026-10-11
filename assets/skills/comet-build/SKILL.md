@@ -9,6 +9,8 @@ After entry returns layout, follow `comet-classic/reference/classic-layout.md` t
 
 ## SDK Run path
 
+New SDK changes use `comet-state.yaml`. Historical `.comet.yaml` files remain in place for reads and writes; compat initialization still uses the old name. If both names exist, including a dangling symlink, stop and preserve them rather than renaming or overwriting either. Use the ownership and paths returned by Runtime.
+
 When the response already includes `agent.continuation.mode`, follow `comet-classic/reference/auto-transition.md` first. `wait` means wait for the original task, without running recovery queries merely because the compatibility field says `nextAction.kind: reconcile`. Use the current response’s commands and inputs; submit `completion` only after the Skill’s actual work is complete. Recovery rules below based on `nextAction.kind` apply only to older responses without `mode`.
 
 Reuse the current valid result's `agent.continuation` / `data.nextAction` and bound state. Run `comet state next <change-name> --json` only on a cold resume, after external state changes, or when necessary information is missing. For `data.runtimeFormat: sdk`, advance only this Run; the implementation methods, plan content, and reviews below still apply, but their compat state writes and evidence commands do not. `data.phase` must be `build`. Reuse valid layout and configuration already in context; use `comet state check <change-name> build --json` only when they are missing. For `nextAction.kind: reconcile`, run `comet state check <change-name> build --recover --json` and establish the original outcome before repeating external work.

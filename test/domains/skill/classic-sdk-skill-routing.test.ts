@@ -43,7 +43,7 @@ describe('Classic Chinese Skill SDK routing', () => {
     expect(entry).toContain('comet state next <change-name> --json');
     expect(entry).toContain('runtimeFormat');
     expect(entry).toContain('`sdk` 与 `compat`');
-    expect(entry).toContain('新旧 change 均保留 `.comet.yaml`');
+    expect(entry).toContain('SDK 新 change 使用 `comet-state.yaml`，历史 `.comet.yaml` 原地读写');
     expect(entry).not.toContain('`sdk` 与 `legacy`');
     expect(entry).toContain('nextAction.kind');
     expect(entry).toContain('comet state restore <change-name> --confirmed');
@@ -57,7 +57,7 @@ describe('Classic Chinese Skill SDK routing', () => {
     expect(open).toContain('comet guard <change-name> open --json');
     expect(open).toContain('comet guard <change-name> open --apply --approval-hash <approvalHash>');
     expect(open).toContain('runtimeFormat: compat');
-    expect(open).toContain('change 目录仍保留 `.comet.yaml`');
+    expect(open).toContain('新 change 保存 `comet-state.yaml`，历史 `.comet.yaml` 原地保留');
   });
 
   it('uses the Design proposal Wait for SDK approval and preserves the legacy recipe', async () => {
@@ -71,7 +71,7 @@ describe('Classic Chinese Skill SDK routing', () => {
       'comet state complete-design <change-name> --design-doc <design-doc-ref> --approval-hash <proposalHash>',
     );
     expect(design).toContain('以下旧 Runtime 步骤仅用于 `runtimeFormat: compat`');
-    expect(design).toContain('原 `.comet.yaml` 由 Runtime 同步');
+    expect(design).toContain('实际状态文件由 Runtime 同步');
   });
 
   it('routes SDK Build configuration, plan, execution, and check through one Run', async () => {

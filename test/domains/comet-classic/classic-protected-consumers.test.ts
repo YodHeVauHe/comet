@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -83,6 +83,7 @@ describe.sequential('Classic protected path consumers', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     process.chdir(previousCwd);
     await Promise.all([
       fs.rm(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
@@ -110,6 +111,28 @@ describe.sequential('Classic protected path consumers', () => {
     expect(await fs.readFile(stateFile, 'utf8')).toBe(before);
     expect(await fs.readFile(path.join(outsideRoot, 'design.md'), 'utf8')).toBe('outside design\n');
   });
+
+  it.each(['junction', 'malformed-yaml'])(
+    'validates every update before assigning identity for %s failures',
+    async (kind) => {
+      await writeFile(path.join(outsideRoot, 'design.md'), 'outside design\n');
+      if (!(await linkDirectory(outsideRoot, path.join(projectRoot, 'linked-artifacts')))) return;
+      const stateFile = path.join(projectRoot, 'openspec', 'changes', 'demo', '.comet.yaml');
+      const before = await fs.readFile(stateFile, 'utf8');
+      const writes = [
+        vi.spyOn(fs, 'mkdir'),
+        vi.spyOn(fs, 'writeFile'),
+        vi.spyOn(fs, 'rename'),
+        vi.spyOn(fs, 'unlink'),
+      ];
+      const invalid =
+        kind === 'junction' ? ['design_doc', 'linked-artifacts/design.md'] : ['base_ref', '['];
+      const result = await runClassicCli(['state', 'set', 'demo', 'language', 'zh-CN', ...invalid]);
+      expect(result.exitCode).not.toBe(0);
+      for (const write of writes) expect(write).not.toHaveBeenCalled();
+      expect(await fs.readFile(stateFile, 'utf8')).toBe(before);
+    },
+  );
 
   it('does not write a Classic artifact through a parent junction replaced before commit', async () => {
     const protectedPaths =

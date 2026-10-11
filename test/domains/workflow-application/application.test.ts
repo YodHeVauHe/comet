@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,7 +21,10 @@ import {
   inspectApplicationSkill,
 } from '../../../domains/workflow-application/index.js';
 import type { SkillExecutionHost } from '../../../domains/workflow-application/index.js';
-import { readWorkflowApplicationRun } from '../../../domains/workflow-application/application.js';
+import {
+  readWorkflowApplicationRun,
+  inspectWorkflowApplicationRun,
+} from '../../../domains/workflow-application/application.js';
 import {
   createDiskApplication,
   createScopeCycleApplication,
@@ -53,15 +57,69 @@ describe('application adaptation and SDK authority', () => {
       workflow: { id: 'editorial', version: '1' },
       input,
     });
-    const storeDir = path.join(root, '.comet/runtime/applications', manifest.id);
-    const [runDir] = await fs.readdir(storeDir);
-    const [revisionFile] = await fs.readdir(path.join(storeDir, runDir));
-    const recordFile = path.join(storeDir, runDir, revisionFile);
+    const storeDir = path.join(resolveWorkspaceRuntimeRootSync(root), 'applications', manifest.id);
+    const [runDir] = await fs.readdir(path.join(storeDir, '.runtime-store-v2'));
+    const recordFile = path.join(storeDir, '.runtime-store-v2', runDir, 'checkpoint.json');
     const before = await fs.readFile(recordFile, 'utf8');
     await fs.writeFile(fixture.file, '{}');
     expect(await readWorkflowApplicationRun(root, manifest.id, 'report')).toEqual(run);
     expect(await readWorkflowApplicationRun(root, manifest.id, 'missing')).toBeNull();
     expect(await fs.readFile(recordFile, 'utf8')).toBe(before);
+  });
+  it('keeps a missing application store read-only without creating runtime roots or fences', async () => {
+    const fixture = await createDiskApplication(root);
+    const loaded = await loadWorkflowApplication({
+      file: fixture.file,
+      projectRoot: root,
+      readOnly: true,
+    });
+    expect(await loaded.store.read('missing')).toBeNull();
+    expect(await readWorkflowApplicationRun(root, 'missing-app', 'missing')).toBeNull();
+    await expect(
+      inspectWorkflowApplicationRun(root, 'missing-app', 'missing', { readOnly: true }),
+    ).rejects.toThrow();
+    expect(await fs.stat(resolveWorkspaceRuntimeRootSync(root)).catch(() => null)).toBeNull();
+    expect(await fs.stat(path.join(root, '.comet')).catch(() => null)).toBeNull();
+  });
+  it('loads a mutable application without creating Runtime storage until its first operation', async () => {
+    const fixture = await createDiskApplication(root);
+    const loaded = await loadWorkflowApplication({ file: fixture.file, projectRoot: root });
+    const runtimeRoot = resolveWorkspaceRuntimeRootSync(root);
+    expect(await fs.stat(runtimeRoot).catch(() => null)).toBeNull();
+    expect(await fs.stat(path.join(root, '.comet')).catch(() => null)).toBeNull();
+    const runtime = createRuntime({ ...loaded.implementation, store: loaded.store });
+    const run = await runtime.start({
+      runId: 'first-operation',
+      workflow: { id: 'editorial', version: '1' },
+      input,
+    });
+    expect(await readWorkflowApplicationRun(root, loaded.manifest.id, run.runId)).toEqual(run);
+    expect((await fs.stat(path.join(root, '.comet/runtime'))).isFile()).toBe(true);
+  });
+  it('reads legacy application records without migration and rejects dual authority', async () => {
+    const { runtime, loaded } = await application();
+    const run = await runtime.start({
+      runId: 'legacy-report',
+      workflow: { id: 'editorial', version: '1' },
+      input,
+    });
+    const current = path.join(
+      resolveWorkspaceRuntimeRootSync(root),
+      'applications',
+      loaded.manifest.id,
+    );
+    const legacyRoot = path.join(root, '.comet/runtime');
+    await fs.unlink(legacyRoot);
+    const legacy = path.join(legacyRoot, 'applications', loaded.manifest.id);
+    await fs.mkdir(path.dirname(legacy), { recursive: true });
+    await fs.cp(current, legacy, { recursive: true });
+    await expect(readWorkflowApplicationRun(root, loaded.manifest.id, run.runId)).rejects.toThrow(
+      '同时存在',
+    );
+    await fs.rm(current, { recursive: true });
+    expect(await readWorkflowApplicationRun(root, loaded.manifest.id, run.runId)).toEqual(run);
+    expect((await fs.lstat(legacyRoot)).isDirectory()).toBe(true);
+    expect(await fs.stat(current).catch(() => null)).toBeNull();
   });
   async function application(parallel = false) {
     const fixture = await createDiskApplication(root, { parallel });
@@ -72,6 +130,36 @@ describe('application adaptation and SDK authority', () => {
       runtime: createRuntime({ ...loaded.implementation, store: loaded.store }),
     };
   }
+  it.each(['init', 'replace'])('rejects a stale application store after Git %s', async (mode) => {
+    if (mode === 'replace') execFileSync('git', ['init', '-q', root]);
+    const { runtime, loaded } = await application();
+    const run = await runtime.start({
+      runId: 'report',
+      workflow: { id: 'editorial', version: '1' },
+      input,
+    });
+    const originalRoot = resolveWorkspaceRuntimeRootSync(root);
+    const storeDir = path.join(
+      originalRoot,
+      'applications',
+      loaded.manifest.id,
+      '.runtime-store-v2',
+    );
+    const [id] = await fs.readdir(storeDir);
+    const file = path.join(storeDir, id, 'checkpoint.json');
+    const original = await fs.readFile(file, 'utf8');
+    if (mode === 'replace')
+      await fs.rename(path.join(root, '.git'), path.join(root, '.git.previous'));
+    execFileSync('git', ['init', '-q', root]);
+    const currentRoot = resolveWorkspaceRuntimeRootSync(root);
+    expect(currentRoot).not.toBe(originalRoot);
+    await expect(loaded.store.read(run.runId)).rejects.toMatchObject({ code: 'WORKFLOW_CHANGED' });
+    await expect(
+      loaded.store.compareAndSwap(run.runId, run.revision, { ...run, revision: run.revision + 1 }),
+    ).rejects.toMatchObject({ code: 'WORKFLOW_CHANGED' });
+    expect(await fs.readFile(file, 'utf8')).toBe(original);
+    expect(await fs.stat(currentRoot).catch(() => null)).toBeNull();
+  });
   function outcome(action: RuntimeAction, overrides: Partial<RuntimeOutcome> = {}): RuntimeOutcome {
     return {
       actionId: action.id,

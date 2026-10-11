@@ -200,9 +200,7 @@ export async function nativeNewCommand(
   }
   const paths = await nativeProjectPaths(projectRoot, config.native.artifact_root);
   await ensureNativeDirectories(paths);
-  // `new` is a complete Native entry point.  Runtime state is created under
-  // `.comet/runtime`; make that state non-input before the first candidate is
-  // checked, even when the project has never run `native init`.
+  // 保留旧 Runtime 路径及迁移 fence 的 Git 排除，避免兼容文件进入候选输入。
   await ensureCometProjectGitignore(projectRoot);
   const capabilityDiscovery = await discoverNativeCapability(
     projectRoot,

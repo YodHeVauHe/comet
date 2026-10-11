@@ -9,6 +9,7 @@ import { execFileSync, spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import { resolveClassicRunDirectory } from '../../../domains/comet-classic/classic-runtime-paths.js';
 
 const scriptsDir = path.resolve('assets', 'skills', 'comet', 'scripts');
 const classicRuntimeRoot = path.resolve('assets', 'skills', 'comet', 'runtime', 'classic');
@@ -125,7 +126,12 @@ describe('comet guard', () => {
 
     expect(result.status).toBe(0);
     await expect(
-      fs.stat(path.join(tmpDir, 'openspec', 'changes', 'dual-root', '.comet')),
+      fs.stat(
+        path.join(
+          await resolveClassicRunDirectory(path.join(tmpDir, 'openspec', 'changes', 'dual-root')),
+          '.comet',
+        ),
+      ),
     ).resolves.toBeDefined();
   });
 
@@ -619,11 +625,12 @@ describe('comet guard', () => {
       const changeDir = path.join(tmpDir, 'openspec', 'changes', 'other-run');
       await createChange(tmpDir, 'other-run', buildYaml);
       expect(runNode(tmpDir, guardScript, ['other-run', 'build']).status).not.toBe(0);
+      const runtimeDirectory = await resolveClassicRunDirectory(changeDir);
       const run = JSON.parse(
-        await fs.readFile(path.join(changeDir, '.comet', 'run-state.json'), 'utf8'),
+        await fs.readFile(path.join(runtimeDirectory, '.comet', 'run-state.json'), 'utf8'),
       ) as { trajectoryRef: string };
       await fs.appendFile(
-        path.join(changeDir, run.trajectoryRef),
+        path.join(runtimeDirectory, run.trajectoryRef),
         `${JSON.stringify({
           sequence: 999,
           timestamp: '2026-07-11T00:00:00.000Z',

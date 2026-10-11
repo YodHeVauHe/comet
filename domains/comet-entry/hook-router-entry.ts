@@ -8,7 +8,7 @@ import {
   renderCometHookDecision,
 } from '../../platform/process/hook-adapter.js';
 import { runWithHookReadCache } from '../../platform/process/hook-read-cache.js';
-import { inspectCometHook } from './hook-router.js';
+import { inspectCometHook, inspectCometRuntimeWriteTargets } from './hook-router.js';
 import type { CometHookDecision } from '../workflow-contract/hook.js';
 import { resolveCometHookProjectRoot } from './hook-project-root.js';
 import { readCometCurrentSelection } from '../workflow-contract/current-selection.js';
@@ -52,6 +52,8 @@ export async function projectRootFrom(
     const candidate = request
       ? await resolveCometHookProjectRoot(parsed.projectRoot, request)
       : parsed.projectRoot;
+    if (request && (await inspectCometRuntimeWriteTargets(candidate, request, parsed.projectRoot)))
+      return candidate;
     return configuredProjectFrom(candidate);
   }
   // A Router without --project-root is a legacy/global installation. It must
@@ -63,6 +65,8 @@ export async function projectRootFrom(
   if (!request?.cwd) return null;
 
   const discoveryStart = request.cwd;
+  const discovered = await discoverCachedNativeProject(discoveryStart);
+  if (await inspectCometRuntimeWriteTargets(discovered, request)) return discovered;
   return configuredProjectFrom(discoveryStart);
 }
 
@@ -105,9 +109,16 @@ export async function runCometHookRouter(args: readonly string[]): Promise<numbe
         return { allowed: true, reason: 'Hook event is not a write' };
       }
       const projectRoot = await projectRootFrom(parsed, request);
-      return projectRoot
-        ? inspectCometHook(projectRoot, request)
-        : { allowed: true, reason: 'No Comet project discovered' };
+      if (!projectRoot) return { allowed: true, reason: 'No Comet project discovered' };
+      if (parsed.projectRoot && projectRoot !== parsed.projectRoot) {
+        const runtimeDecision = await inspectCometRuntimeWriteTargets(
+          projectRoot,
+          request,
+          parsed.projectRoot,
+        );
+        if (runtimeDecision) return runtimeDecision;
+      }
+      return inspectCometHook(projectRoot, request);
     });
   } catch (error) {
     decision = {

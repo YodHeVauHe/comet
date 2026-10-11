@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
@@ -77,7 +78,7 @@ describe('Native status discovery pagination', () => {
     );
     expect(started.response.status).toBe('succeeded');
     const store = createFileRuntimeStore<WorkflowRun>({
-      rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'native'),
+      rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'native'),
     });
     const run = await store.read('sdk-change');
     if (!run) throw new Error('SDK Run was not persisted');

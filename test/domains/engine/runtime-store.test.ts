@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -10,6 +11,11 @@ import {
   createFileRuntimeStore,
   createMemoryRuntimeStore,
 } from '../../../domains/engine/runtime-store.js';
+
+function runDirectory(rootDir: string, runId = 'run-1'): string {
+  const hash = createHash('sha256').update(JSON.stringify(runId)).digest('hex');
+  return path.join(rootDir, '.runtime-store-v2', hash);
+}
 
 interface RecordValue {
   runId: string;
@@ -207,9 +213,9 @@ describe('file RuntimeStore', () => {
       const first = { runId: 'run-1', revision: 1, state: { message: 'ready' } };
       await store.compareAndSwap(first.runId, null, first);
       await store.compareAndSwap(first.runId, 1, { ...first, revision: 2 });
-      const runDir = path.join(rootDir, (await fs.readdir(rootDir))[0]);
-      const latest = path.join(runDir, '0000000000000002.json');
-      if (damage === 'missing') await fs.unlink(path.join(runDir, '0000000000000001.json'));
+      const runDir = runDirectory(rootDir);
+      const latest = path.join(runDir, 'checkpoint.json');
+      if (damage === 'missing') await fs.unlink(latest);
       else if (damage === 'corrupt') await fs.writeFile(latest, '{broken');
       else
         await fs.writeFile(
@@ -248,7 +254,7 @@ describe('file RuntimeStore', () => {
       revision: 1,
       state: { message: 'ready' },
     });
-    const runDir = path.join(rootDir, (await fs.readdir(rootDir))[0]);
+    const runDir = runDirectory(rootDir);
     const outside = path.join(root, 'outside');
     await fs.mkdir(outside);
     const readdir = fs.readdir.bind(fs);
@@ -264,33 +270,40 @@ describe('file RuntimeStore', () => {
     }
   });
 
-  it('has one CAS winner when independent processes publish the same revision', async () => {
-    const rootDir = path.join(root, 'store');
-    const bundle = await bundleStore(root);
-    const store = createFileRuntimeStore<RecordValue>({ rootDir });
-    await store.compareAndSwap('run-1', null, {
-      runId: 'run-1',
-      revision: 1,
-      state: { message: 'ready' },
-    });
-    const workers = await Promise.all(
-      ['a', 'b', 'c', 'd'].map((label) => startWorker(bundle, rootDir, 'normal', label)),
-    );
-    try {
-      const results = workers.map(async (worker) => {
-        const message = once(worker, 'message');
-        const exited = once(worker, 'exit');
-        worker.send('go');
-        const [result] = await message;
-        await exited;
-        return result as { committed: boolean };
-      });
-      expect((await Promise.all(results)).filter((result) => result.committed)).toHaveLength(1);
-      expect((await store.read('run-1'))!.revision).toBe(2);
-    } finally {
-      for (const worker of workers) worker.kill();
-    }
-  });
+  it.each(['new', 'legacy'])(
+    'has one CAS winner when independent processes publish the same revision (%s)',
+    async (layout) => {
+      const rootDir = path.join(root, 'store');
+      const bundle = await bundleStore(root);
+      const store = createFileRuntimeStore<RecordValue>({ rootDir });
+      const first = { runId: 'run-1', revision: 1, state: { message: 'ready' } };
+      if (layout === 'legacy') {
+        const original = path.join(
+          rootDir,
+          createHash('sha256').update(JSON.stringify(first.runId)).digest('hex'),
+        );
+        await fs.mkdir(original, { recursive: true });
+        await fs.writeFile(path.join(original, '0000000000000001.json'), JSON.stringify(first));
+      } else await store.compareAndSwap(first.runId, null, first);
+      const workers = await Promise.all(
+        ['a', 'b', 'c', 'd'].map((label) => startWorker(bundle, rootDir, 'normal', label)),
+      );
+      try {
+        const results = workers.map(async (worker) => {
+          const message = once(worker, 'message');
+          const exited = once(worker, 'exit');
+          worker.send('go');
+          const [result] = await message;
+          await exited;
+          return result as { committed: boolean };
+        });
+        expect((await Promise.all(results)).filter((result) => result.committed)).toHaveLength(1);
+        expect((await store.read('run-1'))!.revision).toBe(2);
+      } finally {
+        for (const worker of workers) worker.kill();
+      }
+    },
+  );
 
   it.each(['before', 'after'])('recovers a writer killed %s atomic publication', async (mode) => {
     const rootDir = path.join(root, 'store');
@@ -312,9 +325,9 @@ describe('file RuntimeStore', () => {
     const recovered = (await reopened.read('run-1'))!;
     expect(recovered.revision).toBe(mode === 'before' ? 1 : 2);
     expect(recovered.state.message).toBe(mode === 'before' ? 'ready' : 'next');
-    const runDir = path.join(rootDir, (await fs.readdir(rootDir))[0]);
+    const runDir = runDirectory(rootDir);
     const abandoned = (await fs.readdir(runDir)).filter((name) => name.endsWith('.tmp'));
-    expect(abandoned.length).toBeGreaterThan(0);
+    expect(abandoned.length).toBe(mode === 'before' ? 1 : 0);
     expect(
       await reopened.compareAndSwap('run-1', recovered.revision, {
         ...recovered,
@@ -349,13 +362,15 @@ async function startWorker(
 ): Promise<ChildProcess> {
   const script = `
     import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
     import { pathToFileURL } from 'node:url';
     const [bundle, rootDir, mode, label] = process.argv.slice(1);
     const { createFileRuntimeStore } = await import(pathToFileURL(bundle).href);
     if (mode !== 'normal') {
-      const link = fs.link.bind(fs);
-      fs.link = async (...args) => {
-        if (mode === 'after') await link(...args);
+      const rename = fs.rename.bind(fs);
+      fs.rename = async (...args) => {
+        if (!String(args[1]).endsWith('checkpoint.json')) return rename(...args);
+        if (mode === 'after') await rename(...args);
         process.send({ checkpoint: mode });
         await new Promise(() => {});
       };

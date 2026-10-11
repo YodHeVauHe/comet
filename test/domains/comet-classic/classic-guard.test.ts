@@ -1,3 +1,4 @@
+import { resolveClassicRunDirectory } from '../../../domains/comet-classic/classic-runtime-paths.js';
 import { spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
@@ -509,7 +510,7 @@ describe('Classic guard command', () => {
       classic_profile: 'hotfix',
       classic_migration: 1,
     });
-    const runState = await readRunState(changeDir);
+    const runState = await readRunState(await resolveClassicRunDirectory(changeDir));
     expect(runState).not.toBeNull();
     expect(runState!.skill).toBe('comet-classic');
     expect(runState!.currentStep).toBe('hotfix.build.complete');
@@ -530,7 +531,12 @@ describe('Classic guard command', () => {
         { field: 'phase', from: 'open', to: 'build' },
       ],
     });
-    const trajectory = (await fs.readFile(path.join(changeDir, runState!.trajectoryRef), 'utf8'))
+    const trajectory = (
+      await fs.readFile(
+        path.join(await resolveClassicRunDirectory(changeDir), runState!.trajectoryRef),
+        'utf8',
+      )
+    )
       .trim()
       .split(/\r?\n/u)
       .map((line) => JSON.parse(line) as { type: string });

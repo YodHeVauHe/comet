@@ -1,5 +1,7 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { getCurrentVersion } from '../../../platform/version/version.js';
 import { promises as fs } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -715,6 +717,11 @@ it('reconciles a compiled package whose result was lost using the original Actio
 
 it('discovers resumable Runs through SDK validation and rejects unsupported host or unsafe target before creating work', async () => {
   await analyzed();
+  const storage = path.join(resolveWorkspaceRuntimeRootSync(root), 'creator');
+  await fs.writeFile(
+    path.join(storage, `.${'a'.repeat(64)}.11111111-1111-1111-1111-111111111111.tmp`),
+    'incomplete',
+  );
   const listed = await listCreatorRuns(root);
   expect(listed.map((run) => run.runId)).toEqual(['creation-one']);
   expect(listed[0].waits[0].stepId).toBe('confirm-plan');
@@ -735,6 +742,38 @@ it('discovers resumable Runs through SDK validation and rejects unsupported host
   ).toThrow(/相对目录/);
 });
 
+it.each(['init', 'replace'])('rejects a stale Creator runtime after Git %s', async (mode) => {
+  if (mode === 'replace') execFileSync('git', ['init', '-q', root]);
+  const runtime = createCreatorRuntime(root);
+  await runtime.start({
+    runId: 'stale-creator',
+    workflow: { id: 'comet-creator', version: '3' },
+    input: { goal: '报告', host: 'codex', installTarget: 'output' },
+  });
+  const originalRoot = resolveWorkspaceRuntimeRootSync(root);
+  const storeDir = path.join(originalRoot, 'creator', '.runtime-store-v2');
+  const [id] = await fs.readdir(storeDir);
+  const file = path.join(storeDir, id, 'checkpoint.json');
+  const original = await fs.readFile(file, 'utf8');
+  if (mode === 'replace')
+    await fs.rename(path.join(root, '.git'), path.join(root, '.git.previous'));
+  execFileSync('git', ['init', '-q', root]);
+  const currentRoot = resolveWorkspaceRuntimeRootSync(root);
+  expect(currentRoot).not.toBe(originalRoot);
+  await expect(runtime.inspect('stale-creator')).rejects.toMatchObject({
+    code: 'WORKFLOW_CHANGED',
+  });
+  await expect(
+    runtime.start({
+      runId: 'new-creator',
+      workflow: { id: 'comet-creator', version: '3' },
+      input: { goal: '报告', host: 'codex', installTarget: 'output' },
+    }),
+  ).rejects.toMatchObject({ code: 'WORKFLOW_CHANGED' });
+  expect(await fs.readFile(file, 'utf8')).toBe(original);
+  expect(await fs.stat(currentRoot).catch(() => null)).toBeNull();
+});
+
 it.each(['1', '2'])(
   'rejects unsupported Creator definition %s before creating a Run',
   async (version) => {
@@ -746,6 +785,8 @@ it.each(['1', '2'])(
         input: { goal: '报告', host: 'codex', installTarget: 'export' },
       }),
     ).toThrow(/只支持新创作定义/);
-    expect(await fs.stat(path.join(root, '.comet/runtime/creator')).catch(() => null)).toBeNull();
+    expect(
+      await fs.stat(path.join(resolveWorkspaceRuntimeRootSync(root), 'creator')).catch(() => null),
+    ).toBeNull();
   },
 );

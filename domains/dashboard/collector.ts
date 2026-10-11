@@ -1,3 +1,5 @@
+import { resolveClassicStateFile } from '../comet-classic/classic-state-file.js';
+import { inspectClassicProjectTarget } from '../comet-classic/classic-protected-path.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { collectGitSnapshot } from './git.js';
@@ -183,6 +185,9 @@ export async function collectDashboardChangePage(
   options: DashboardChangePageOptions,
 ): Promise<DashboardChangePage> {
   const collection = await collectClassicChangeCandidates(path.resolve(projectPath));
+  if (collection.errors.length > 0) {
+    throw new DashboardChangeQueryError(collection.errors.join('\n'));
+  }
   return buildDashboardChangePage(collection, options);
 }
 
@@ -268,7 +273,7 @@ export async function collectDashboardChangeDetail(
   ) {
     return null;
   }
-  return tryBuildChangeItem({
+  return buildChangeItem({
     name: location.name,
     dir,
     status: location.status,
@@ -360,7 +365,9 @@ async function collectCandidatesWithError(
   input: CollectCandidatesInput,
 ): Promise<{ items: ClassicChangeCandidate[]; errors: string[] }> {
   try {
-    return { items: await collectChangeCandidatesFromRoot(input), errors: [] };
+    const errors: string[] = [];
+    const items = await collectChangeCandidatesFromRoot(input, errors);
+    return { items, errors };
   } catch (error) {
     return {
       items: [],
@@ -386,6 +393,7 @@ interface CollectCandidatesInput {
 
 async function collectChangeCandidatesFromRoot(
   input: CollectCandidatesInput,
+  errors: string[],
 ): Promise<ClassicChangeCandidate[]> {
   const relativeRoot =
     input.status === 'archived'
@@ -412,7 +420,7 @@ async function collectChangeCandidatesFromRoot(
       if (!(await safeProjectDirectoryExists(input.projectRoot, dir, `Classic change ${entry}`))) {
         return null;
       }
-      return tryBuildChangeCandidate({ ...input, name: entry, dir });
+      return tryBuildChangeCandidate({ ...input, name: entry, dir }, errors);
     },
   );
   return candidates.filter((candidate): candidate is ClassicChangeCandidate => candidate !== null);
@@ -420,10 +428,12 @@ async function collectChangeCandidatesFromRoot(
 
 async function tryBuildChangeCandidate(
   input: CollectCandidatesInput & { name: string; dir: string },
+  errors: string[],
 ): Promise<ClassicChangeCandidate | null> {
   try {
     return await buildChangeCandidate(input);
   } catch (error) {
+    errors.push(formatClassicCollectionError(projectRelative(input.projectRoot, input.dir), error));
     console.warn(
       `[dashboard] skipping change index "${input.name}": ${(error as Error).message ?? error}`,
     );
@@ -434,7 +444,7 @@ async function tryBuildChangeCandidate(
 async function buildChangeCandidate(
   input: CollectCandidatesInput & { name: string; dir: string },
 ): Promise<ClassicChangeCandidate> {
-  const yamlPath = path.join(input.dir, '.comet.yaml');
+  const yamlPath = await resolveClassicStateFile(input.dir);
   const tasksPath = path.join(input.dir, 'tasks.md');
   const proposalPath = path.join(input.dir, 'proposal.md');
   const designPath = path.join(input.dir, 'design.md');
@@ -726,19 +736,23 @@ interface ClassicCollection {
 
 async function collectClassicChanges(projectRoot: string): Promise<ClassicCollection> {
   const candidates = await collectClassicChangeCandidates(projectRoot);
+  const errors = [...candidates.errors];
   const collect = async (
     entries: readonly ClassicChangeCandidate[],
   ): Promise<ChangeDashboardItem[]> => {
     const items = await mapWithConcurrency(entries, CHANGE_INDEX_CONCURRENCY, (candidate) =>
-      tryBuildChangeItem({
-        name: candidate.name,
-        dir: candidate.dir,
-        status: candidate.status,
-        projectRoot: candidate.projectRoot,
-        changesRelative: candidate.changesRelative,
-        workspace: candidate.workspace,
-        locator: candidate.locator,
-      }),
+      tryBuildChangeItem(
+        {
+          name: candidate.name,
+          dir: candidate.dir,
+          status: candidate.status,
+          projectRoot: candidate.projectRoot,
+          changesRelative: candidate.changesRelative,
+          workspace: candidate.workspace,
+          locator: candidate.locator,
+        },
+        errors,
+      ),
     );
     return items.filter((item): item is ChangeDashboardItem => item !== null);
   };
@@ -746,7 +760,7 @@ async function collectClassicChanges(projectRoot: string): Promise<ClassicCollec
     collect(candidates.active),
     collect(candidates.archived),
   ]);
-  return { active, archived, errors: candidates.errors };
+  return { active, archived, errors };
 }
 
 function formatClassicCollectionError(relativePath: string, error: unknown): string {
@@ -759,10 +773,14 @@ function formatClassicCollectionError(relativePath: string, error: unknown): str
  * sweep continues. This collection path is read-only and "best effort by design";
  * a single malformed yaml or unreadable directory shouldn't blank the page.
  */
-async function tryBuildChangeItem(input: BuildChangeInput): Promise<ChangeDashboardItem | null> {
+async function tryBuildChangeItem(
+  input: BuildChangeInput,
+  errors: string[],
+): Promise<ChangeDashboardItem | null> {
   try {
     return await buildChangeItem(input);
   } catch (error) {
+    errors.push(formatClassicCollectionError(projectRelative(input.projectRoot, input.dir), error));
     console.warn(
       `[dashboard] skipping change "${input.name}": ${(error as Error).message ?? error}`,
     );
@@ -792,7 +810,7 @@ async function buildChangeItem(input: BuildChangeInput): Promise<ChangeDashboard
   if (!changeInspection.exists) {
     throw new Error(`Classic change ${input.name} disappeared during collection`);
   }
-  const yamlPath = path.join(input.dir, '.comet.yaml');
+  const yamlPath = await resolveClassicStateFile(input.dir);
   const tasksPath = path.join(input.dir, 'tasks.md');
   const designPath = path.join(input.dir, 'design.md');
   const proposalPath = path.join(input.dir, 'proposal.md');
@@ -984,14 +1002,18 @@ async function readArtifactPreviews(
       };
 
       try {
-        const relative = path.relative(projectRoot, filePath).replaceAll('\\', '/');
+        const inspection = await inspectClassicProjectTarget(projectRoot, filePath, {
+          label: `${label} preview`,
+          expected: 'file',
+        });
         const result = await readProtectedProjectFile(
-          projectRoot,
-          relative,
+          inspection.projectRoot,
+          inspection.relative,
           ARTIFACT_READ_LIMIT_BYTES,
           { label: `${label} preview` },
         );
         const stat = result.stat;
+        preview.path = inspection.target;
         preview.exists = true;
         preview.size = Number(stat.size);
         preview.updatedAt = stat.mtime.toISOString();
@@ -1029,11 +1051,8 @@ async function safeProjectFileExists(
   label: string,
 ): Promise<boolean> {
   try {
-    return await protectedProjectFileExists(
-      projectRoot,
-      path.relative(projectRoot, file).replaceAll('\\', '/'),
-      { label },
-    );
+    return (await inspectClassicProjectTarget(projectRoot, file, { label, expected: 'file' }))
+      .exists;
   } catch {
     return false;
   }
@@ -1256,7 +1275,7 @@ function buildGroupedArtifacts(input: GroupedInput): GroupedArtifact[] {
     },
     {
       key: 'cometYaml',
-      label: '.comet.yaml',
+      label: path.basename(input.cometYamlPath),
       source: 'comet',
       exists: input.cometYamlExists,
       path: input.cometYamlPath,

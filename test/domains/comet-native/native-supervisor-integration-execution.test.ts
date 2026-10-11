@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -128,8 +129,8 @@ async function verifiedSupervisor() {
 describe('Supervisor integration check execution', () => {
   it('reserves the integration worktree before running checks with competing plans', async () => {
     const { root, paths, state } = await verifiedSupervisor();
-    const marker = path.join(root, '.comet/runtime/integration-started');
-    const release = path.join(root, '.comet/runtime/integration-release');
+    const marker = path.join(resolveWorkspaceRuntimeRootSync(root), 'integration-started');
+    const release = path.join(resolveWorkspaceRuntimeRootSync(root), 'integration-release');
     const first = integrateNativeSupervisorChildWorkspace({
       paths,
       state,

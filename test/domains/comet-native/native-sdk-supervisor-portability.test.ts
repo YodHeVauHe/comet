@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -276,7 +277,12 @@ it('transfers an uncommitted Child Builder to a new checkout without reporting i
   ) as { checkpointHash: string };
   const receipt = JSON.parse(
     await fs.readFile(
-      path.join(copy, '.comet', 'runtime', 'transfers', 'native', 'portable-child.json'),
+      path.join(
+        resolveWorkspaceRuntimeRootSync(copy),
+        'transfers',
+        'native',
+        'portable-child.json',
+      ),
       'utf8',
     ),
   ) as { sourceCheckpointHash: string; importedCheckpointHash: string };

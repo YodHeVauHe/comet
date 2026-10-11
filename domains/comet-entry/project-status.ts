@@ -125,7 +125,7 @@ async function listConfiguredNativeStatus(
   const names = await listNativeChangeNames(paths);
   return inspectChanges(names, async (name) => {
     try {
-      if (await readSdkChangeOwner(paths.projectRoot, 'native', name))
+      if (await readSdkChangeOwner(paths.projectRoot, 'native', name, { readOnly: true }))
         return await inspectNativeSdkStatus({
           projectRoot: paths.projectRoot,
           name,
@@ -173,7 +173,7 @@ export async function inspectClassicSdkChangeStatus(
   done = 0,
   total = 0,
 ): Promise<ChangeStatus | null> {
-  const owner = await readSdkChangeOwner(projectRoot, 'classic', name);
+  const owner = await readSdkChangeOwner(projectRoot, 'classic', name, { readOnly: true });
   if (!owner) return null;
   const builtIn = ['classic-full', 'classic-hotfix', 'classic-tweak'].includes(owner.application);
   const inspected = builtIn

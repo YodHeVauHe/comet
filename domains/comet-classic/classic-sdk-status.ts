@@ -7,10 +7,15 @@ import {
   readChangeRuntimeOwner,
   readSdkChangeOwner,
 } from '../workflow-contract/change-runtime-owner.js';
+import { inspectProtectedProjectPath } from '../workflow-contract/protected-project-path.js';
 import { resolveClassicChangeRuntimeOwner } from './classic-runtime-ownership.js';
 import { classicSdkApplicationForRun } from './classic-sdk-revision-application.js';
 import { createClassicSdkStateStore } from './classic-sdk-state-store.js';
-import { resolveClassicChangeDirectory } from './classic-paths.js';
+import {
+  inspectClassicStateFileCandidates,
+  resolveClassicChangeDirectory,
+} from './classic-paths.js';
+import { resolveClassicStateFile } from './classic-state-file.js';
 import type { ClassicProfile, ClassicState } from './classic-state.js';
 
 /** 仅投影本次读取或提交的 Run；后续操作仍须重新校验版本与证据。 */
@@ -72,7 +77,11 @@ export async function inspectClassicSdkRun(
   runtime: WorkflowRuntime;
   profile: ClassicProfile;
 }> {
-  const owner = await readSdkChangeOwner(projectRoot, 'classic', name);
+  await inspectClassicStateFileCandidates(projectRoot, name);
+  const directory = (await resolveClassicChangeDirectory(name, projectRoot)).directory;
+  const owner = await readSdkChangeOwner(projectRoot, 'classic', name, {
+    readOnly: options.readOnly,
+  });
   if (!owner) throw new Error(`Classic change ${name} is not owned by an SDK Run`);
   if (!['classic-full', 'classic-hotfix', 'classic-tweak'].includes(owner.application))
     throw new Error(
@@ -102,7 +111,6 @@ export async function inspectClassicSdkRun(
     commandValidators: application.commandValidators,
   });
   const run = await runtime.inspect(owner.runId);
-  const directory = (await resolveClassicChangeDirectory(name, projectRoot)).directory;
   const state = run.state as ClassicState | undefined;
   const expectedActive =
     run.input &&
@@ -162,7 +170,7 @@ export async function findClassicSdkWorkspace(
   options: { readOnly?: boolean } = {},
 ): Promise<ClassicSdkWorkspace | null> {
   const requestedRoot = path.resolve(projectRoot);
-  if (await readSdkChangeOwner(requestedRoot, 'classic', name)) {
+  if (await readSdkChangeOwner(requestedRoot, 'classic', name, { readOnly: true })) {
     return {
       projectRoot: requestedRoot,
       ...(await inspectClassicSdkRun(requestedRoot, name, options)),
@@ -171,7 +179,7 @@ export async function findClassicSdkWorkspace(
   const candidates: ClassicSdkWorkspace[] = [];
   for (const worktree of listGitWorktrees(requestedRoot)) {
     if (samePath(worktree.root, requestedRoot)) continue;
-    if (!(await readSdkChangeOwner(worktree.root, 'classic', name))) continue;
+    if (!(await readSdkChangeOwner(worktree.root, 'classic', name, { readOnly: true }))) continue;
     const inspected = await inspectClassicSdkRun(worktree.root, name, options);
     if (
       inspected.state.isolation !== 'worktree' ||
@@ -193,7 +201,7 @@ export async function resolveClassicSdkCommandRoot(
   name: string,
 ): Promise<string> {
   const requestedRoot = path.resolve(projectRoot);
-  let localOwner = await readChangeRuntimeOwner(requestedRoot, 'classic', name);
+  let localOwner = await readChangeRuntimeOwner(requestedRoot, 'classic', name, { readOnly: true });
   if (!localOwner) {
     const configAvailable = await fs.access(path.join(requestedRoot, '.comet', 'config.yaml')).then(
       () => true,
@@ -203,7 +211,14 @@ export async function resolveClassicSdkCommandRoot(
       },
     );
     if (configAvailable) {
-      localOwner = await resolveClassicChangeRuntimeOwner(requestedRoot, name);
+      const directory = (await resolveClassicChangeDirectory(name, requestedRoot)).directory;
+      const state = await inspectProtectedProjectPath(
+        requestedRoot,
+        path.relative(requestedRoot, await resolveClassicStateFile(directory)),
+        { label: 'Classic local change state', expected: 'file' },
+      );
+      // 空主工作区只负责定位，不在发现目标 worktree 之前建立 Runtime。
+      if (state.exists) localOwner = await resolveClassicChangeRuntimeOwner(requestedRoot, name);
     }
   }
   if (localOwner) return requestedRoot;

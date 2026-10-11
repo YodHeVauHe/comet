@@ -571,7 +571,7 @@ export async function listActiveNativeChangesOwnedByWorkspace(
         store:
           sdkOwner.application === 'native'
             ? createFileRuntimeStore<WorkflowRun>({
-                rootDir: path.join(paths.projectRoot, '.comet', 'runtime', 'sdk-runs', 'native'),
+                rootDir: path.join(paths.workspaceRuntimeRoot, 'sdk-runs', 'native'),
               })
             : {
                 read: (runId) =>

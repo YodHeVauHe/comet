@@ -1,3 +1,7 @@
+import {
+  resolveWorkspaceRuntimeRoot,
+  resolveWorkspaceRuntimeRootSync,
+} from '../workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -161,12 +165,12 @@ export async function findNativeSdkArchivedStateFile(
 }
 
 /** Read the unprojected local record when repairing an interrupted Run creation. */
-export function readNativeSdkRunRecord(
+export async function readNativeSdkRunRecord(
   projectRoot: string,
   runId: string,
 ): Promise<WorkflowRun | null> {
   return createFileRuntimeStore<WorkflowRun>({
-    rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'native'),
+    rootDir: path.join(await resolveWorkspaceRuntimeRoot(projectRoot), 'sdk-runs', 'native'),
   }).read(runId);
 }
 
@@ -239,12 +243,26 @@ export function createNativeSdkStateStore(
     readOnly?: boolean;
   } = {},
 ): RuntimeStore<WorkflowRun> {
+  const workspaceRuntimeRoot = resolveWorkspaceRuntimeRootSync(projectRoot);
   const store =
     options.store ??
     createFileRuntimeStore<WorkflowRun>({
-      rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'native'),
+      rootDir: path.join(workspaceRuntimeRoot, 'sdk-runs', 'native'),
     });
-  const projectionDir = '.comet/runtime/state-projections/native';
+  async function assertWorkspaceRuntimeCurrent(): Promise<void> {
+    const rejectChangedRoot = (currentRoot: string) => {
+      if (currentRoot !== workspaceRuntimeRoot) {
+        throw new Error(
+          'Native SDK workspace identity changed; recreate the Runtime before continuing',
+        );
+      }
+    };
+    // 旧 handle 不能初始化新 namespace，更不能继续读写它捕获的旧 authority。
+    rejectChangedRoot(resolveWorkspaceRuntimeRootSync(projectRoot));
+    rejectChangedRoot(await resolveWorkspaceRuntimeRoot(projectRoot));
+  }
+
+  const projectionDir = 'state-projections/native';
   // 仅复用本 store 实例中已经校验过的相同文本；每次仍重新读取完整文件。
   // 不信任 mtime 或磁盘 marker，外部编辑及重复 YAML key 仍走完整解析。
   let parsedProjection: { file: string; source: string; document: Record<string, unknown> } | null =
@@ -357,14 +375,15 @@ export function createNativeSdkStateStore(
   }
 
   async function syncStateFile(runId: string): Promise<WorkflowRun | null> {
+    await assertWorkspaceRuntimeCurrent();
     const inspect = async () => {
-      const markerFile = path.join(projectRoot, projectionDir, `${runId}.json`);
+      const markerFile = path.join(workspaceRuntimeRoot, projectionDir, `${runId}.json`);
       let marker: ProjectionMarker | null = null;
       let markerSource: string | null = null;
       try {
         markerSource = (
           await readProtectedProjectFile(
-            projectRoot,
+            workspaceRuntimeRoot,
             `${projectionDir}/${runId}.json`,
             Number.MAX_SAFE_INTEGER,
             { label: 'Native SDK state projection marker' },
@@ -505,16 +524,16 @@ export function createNativeSdkStateStore(
             `Native SDK state projection marker needs recovery for ${runId}; run comet native doctor ${runId} --repair`,
           );
         await atomicWriteContainedText(markerFile, projectionSource, {
-          containedRoot: projectRoot,
+          containedRoot: workspaceRuntimeRoot,
         });
       }
       return run;
     };
     if (options.readOnly) return inspect();
-    await ensureProtectedProjectDirectory(projectRoot, projectionDir, {
+    await ensureProtectedProjectDirectory(workspaceRuntimeRoot, projectionDir, {
       label: 'Native SDK state projection directory',
     });
-    const lockFile = path.join(projectRoot, projectionDir, `${runId}.lock`);
+    const lockFile = path.join(workspaceRuntimeRoot, projectionDir, `${runId}.lock`);
     return withRecoverableFileLock(lockFile, inspect, { timeoutMs: 5_000 });
   }
 
@@ -522,6 +541,7 @@ export function createNativeSdkStateStore(
     read: syncStateFile,
     async compareAndSwap(runId, expectedRevision, next) {
       if (options.readOnly) throw new Error('Native SDK diagnostic store is read-only');
+      await assertWorkspaceRuntimeCurrent();
       const committed = await store.compareAndSwap(runId, expectedRevision, next);
       if (committed) {
         await syncStateFile(runId);

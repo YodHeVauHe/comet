@@ -1,3 +1,4 @@
+import { resolveClassicChangeDirectory } from './classic-paths.js';
 import path from 'node:path';
 import { spawnSync } from 'child_process';
 
@@ -31,6 +32,7 @@ async function assertPublicArchiveNotSdkOwned(args: readonly string[]): Promise<
   const root = await discoverClassicProject(process.cwd());
   const change = forwarded[1];
   if (change && !change.startsWith('-')) {
+    await resolveClassicChangeDirectory(change, root);
     if (await readSdkChangeOwner(root, 'classic', change)) {
       throw new Error(
         `Classic SDK change '${change}' must use the Comet SDK Archive flow; OpenSpec archive would bypass its Run and leave the change incomplete.`,

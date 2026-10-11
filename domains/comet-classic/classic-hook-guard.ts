@@ -1,3 +1,4 @@
+import { isClassicStateFileName } from './classic-state-file.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { stripUtf8Bom } from '../../platform/fs/strip-bom.js';
@@ -171,6 +172,14 @@ async function loadGoverningChange(changeDir: string): Promise<GoverningChange |
       archived: projection.classic.archived,
     };
   } catch (error) {
+    // Only incomplete legacy projections may fall back; identity, path and write conflicts block.
+    if (
+      !(error instanceof Error) ||
+      (!error.message.startsWith('Invalid Classic state:') &&
+        error.message !== 'Classic state projection is unavailable') ||
+      error.message.startsWith('Invalid Classic state: change_id')
+    )
+      throw error;
     // Legacy/partial state without the required Classic fields: fall back to a
     // direct yaml read so the guard still respects the recorded phase rather
     // than crashing the way master's lenient shell scripts did not.
@@ -215,7 +224,9 @@ async function activeChangesImpl(projectRoot: string): Promise<GoverningChange[]
     if (openSpecChangeNameError(entry.name)) continue;
     const active = await inspectClassicActiveChangeDirectory(entry.name, projectRoot);
     if (!active.exists) continue;
-    const governing = (await readSdkChangeOwner(projectRoot, 'classic', entry.name))
+    const governing = (await readSdkChangeOwner(projectRoot, 'classic', entry.name, {
+      readOnly: true,
+    }))
       ? await loadSdkGoverningChange(projectRoot, entry.name, active.directory)
       : active.stateExists
         ? await loadGoverningChange(active.directory)
@@ -236,7 +247,7 @@ const activeGoverningChange = memoizedHookRead(
   'classicActiveChange',
   async (projectRoot: string, changeName: string): Promise<GoverningChange | null> => {
     const active = await inspectClassicActiveChangeDirectory(changeName, projectRoot);
-    if (await readSdkChangeOwner(projectRoot, 'classic', changeName)) {
+    if (await readSdkChangeOwner(projectRoot, 'classic', changeName, { readOnly: true })) {
       const governing = await loadSdkGoverningChange(projectRoot, changeName, active.directory);
       return governing.archived ? null : governing;
     }
@@ -581,7 +592,7 @@ async function governingChange(
   if (target?.kind === 'active') {
     const name = target.changeName;
     const active = await inspectClassicActiveChangeDirectory(name, projectRoot);
-    if (await readSdkChangeOwner(projectRoot, 'classic', name)) {
+    if (await readSdkChangeOwner(projectRoot, 'classic', name, { readOnly: true })) {
       const sdk = await loadSdkGoverningChange(projectRoot, name, active.directory);
       return sdk.archived
         ? {
@@ -671,7 +682,8 @@ function openSpecAllowed(
 ): string | null {
   const key = comparisonKey(relativePath);
   if (!key.startsWith(comparisonKey(openSpecPrefix))) return null;
-  const stateFile = key.endsWith('/.comet.yaml') || key.endsWith('/.openspec.yaml');
+  const stateFile =
+    isClassicStateFileName(path.posix.basename(key)) || key.endsWith('/.openspec.yaml');
   const proposal =
     key.endsWith('/proposal.md') || key.endsWith('/design.md') || key.endsWith('/tasks.md');
   const handoff = key.includes('/.comet/');

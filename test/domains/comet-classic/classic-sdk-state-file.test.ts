@@ -50,7 +50,11 @@ describe('Classic SDK state file contract', () => {
           '--json',
         ]),
       );
-    return { root, cli, stateFile: path.join(root, 'openspec', 'changes', 'demo', '.comet.yaml') };
+    return {
+      root,
+      cli,
+      stateFile: path.join(root, 'openspec', 'changes', 'demo', 'comet-state.yaml'),
+    };
   }
 
   it('creates the familiar state file for an explicitly selected SDK change', async () => {
@@ -111,7 +115,7 @@ describe('Classic SDK state file contract', () => {
     };
     const archived = path.join(root, 'openspec', 'changes', 'archive', '2026-10-01-demo');
     await fs.rename(path.dirname(stateFile), archived);
-    const archivedFile = path.join(archived, '.comet.yaml');
+    const archivedFile = path.join(archived, 'comet-state.yaml');
     await fs.writeFile(
       archivedFile,
       (await fs.readFile(archivedFile, 'utf8')).replace(/\r?\n/gu, '\r\n'),
@@ -355,7 +359,10 @@ describe('Classic SDK state file contract', () => {
     const original = await inspectClassicSdkRun(root, 'demo');
     expect(
       parse(
-        await fs.readFile(path.join(root, 'openspec', 'changes', 'demo', '.comet.yaml'), 'utf8'),
+        await fs.readFile(
+          path.join(root, 'openspec', 'changes', 'demo', 'comet-state.yaml'),
+          'utf8',
+        ),
       ).run_checkpoint,
     ).toBeDefined();
     await fs.writeFile(
@@ -488,7 +495,13 @@ describe('Classic SDK state file contract', () => {
       path.join(restoredRoot, 'openspec', 'changes', 'demo'),
       { recursive: true },
     );
-    const copiedStateFile = path.join(restoredRoot, 'openspec', 'changes', 'demo', '.comet.yaml');
+    const copiedStateFile = path.join(
+      restoredRoot,
+      'openspec',
+      'changes',
+      'demo',
+      'comet-state.yaml',
+    );
     const priorFormat = parse(await fs.readFile(copiedStateFile, 'utf8')) as Record<
       string,
       unknown
@@ -515,7 +528,7 @@ describe('Classic SDK state file contract', () => {
     expect(await readChangeRuntimeOwner(restoredRoot, 'classic', 'demo')).toBeNull();
 
     const previousState = await fs.readFile(
-      path.join(restoredRoot, 'openspec', 'changes', 'demo', '.comet.yaml'),
+      path.join(restoredRoot, 'openspec', 'changes', 'demo', 'comet-state.yaml'),
       'utf8',
     );
 
@@ -544,7 +557,7 @@ describe('Classic SDK state file contract', () => {
     expect(
       parse(
         await fs.readFile(
-          path.join(restoredRoot, 'openspec', 'changes', 'demo', '.comet.yaml'),
+          path.join(restoredRoot, 'openspec', 'changes', 'demo', 'comet-state.yaml'),
           'utf8',
         ),
       ),

@@ -1,3 +1,4 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -129,6 +130,7 @@ async function classicArchiveContext(
   if (!active.exists || active.target !== path.join(layout.changesDir, runInput.change)) {
     throw new Error('Classic Archive active change differs from the SDK Run');
   }
+  await resolveClassicStateFile(active.target);
   const before = await archiveEntries(layout.archiveDir, runInput.change);
   await assertClassicOpenSpecAvailable(projectRoot);
 
@@ -335,7 +337,7 @@ export async function recoverClassicSdkArchive(
   if (!archived.exists) throw new Error('Classic SDK Archive destination is missing');
   const source = await readClassicProjectFile(
     projectRoot,
-    path.join(archived.target, '.comet.yaml'),
+    await resolveClassicStateFile(archived.target),
     {
       label: 'Classic archived state',
     },

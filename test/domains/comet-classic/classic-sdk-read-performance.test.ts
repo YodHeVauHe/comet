@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
@@ -40,8 +41,11 @@ async function preparedChange(
   return {
     root,
     store: createClassicSdkStateStore(root),
-    stateFile: path.join(root, 'openspec/changes/demo/.comet.yaml'),
-    markerFile: path.join(root, '.comet/runtime/state-projections/classic/demo.json'),
+    stateFile: path.join(root, 'openspec/changes/demo/comet-state.yaml'),
+    markerFile: path.join(
+      resolveWorkspaceRuntimeRootSync(root),
+      'state-projections/classic/demo.json',
+    ),
   };
 }
 

@@ -98,8 +98,8 @@ export async function resolveNativeChangeRuntimeOwner(
       );
     }
     const local = await inspectProtectedProjectPath(
-      paths.projectRoot,
-      path.relative(paths.projectRoot, nativeLocalExecutionFile(paths, name)),
+      paths.workspaceRuntimeRoot,
+      path.relative(paths.workspaceRuntimeRoot, nativeLocalExecutionFile(paths, name)),
       { label: 'Native local execution state', expected: 'file' },
     );
     const applicationCheckpoint = await readNativeApplicationCheckpoint(paths.projectRoot, name);

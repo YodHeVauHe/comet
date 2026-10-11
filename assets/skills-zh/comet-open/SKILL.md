@@ -25,7 +25,7 @@ description: '创建 Classic change，整理需求并请用户确认。在用户
 
 - `sdk`：复用现有 Run，按 `data.nextAction.kind` 恢复；已领取但结果未明的 Action 先核对原结果，不重新创建 change 或重发外部工作。
 - `compat`：复用原流程和 `.comet.yaml`；不能自动把该 change 改建为 SDK Run。
-- 命令失败：核对错误、归属记录、Run 和 `.comet.yaml`。归属冲突或状态格式异常时停止并报告；若本地 Run 记录丢失，先检查状态文件中的 `run_checkpoint`，按 `/comet-classic` 的恢复步骤沿用已保存阶段。旧状态没有检查点且用户明确同意重启时，才回到 Open 重新核对证据和确认。只有证实尚无任何 Runtime 归属、change 目录有效时，才按所选隔离方式准备工作区并初始化。不得因缺少 `.comet.yaml` 就重新初始化。
+- 命令失败：核对错误、归属记录、Run 和实际状态文件。归属冲突或状态格式异常时停止并报告；若本地 Run 记录丢失，先检查状态文件中的 `run_checkpoint`，按 `/comet-classic` 的恢复步骤沿用已保存阶段。旧状态没有检查点且用户明确同意重启时，才回到 Open 重新核对证据和确认。只有证实尚无任何 Runtime 归属、change 目录有效时，才按所选隔离方式准备工作区并初始化。不得因缺少某一个文件名就重新初始化。
 
 SDK 与旧 change 都通过以下命令绑定工作区：
 
@@ -225,7 +225,7 @@ Agent JSON 模式下，从 `data.upstream.data` 读取上游字段。下一步�
 └── tasks.md          # 任务清单（勾选框）
 ```
 
-SDK Run 保存在项目 `.comet/runtime/sdk-runs/classic/`，change 目录仍保留 `.comet.yaml`；恢复时通过 `state next` 和 `state check` 读取 Run，不直接编辑 Run 的存储文件。
+SDK Run 保存在用户级工作区 Runtime 目录；新 change 保存 `comet-state.yaml`，历史 `.comet.yaml` 原地保留；恢复时通过 `state next` 和 `state check` 读取 Run，不直接编辑 Run 的存储文件。
 
 ### 3. 入口状态验证
 
@@ -239,7 +239,7 @@ comet state check <name> open
 
 **恢复未完成的创建步骤**：open 阶段的操作允许安全重试；恢复时按以下顺序识别已完成的部分，只补未完成的工作：
 
-1. 先运行 `comet state next <name> --json` 确认归属。`runtimeFormat: sdk` 时复用原 Run；`runtimeFormat: compat` 时保留原流程。只有证实没有 Run、归属记录和 `.comet.yaml`，才准备工作区并运行 `comet state init <name> full --isolation <selected-isolation>`；格式异常或归属冲突时停止，不覆盖。随后选择 change 并运行 `comet state check <name> open`。
+1. 先运行 `comet state next <name> --json` 确认归属。`runtimeFormat: sdk` 时复用原 Run；`runtimeFormat: compat` 时保留原流程。只有证实没有 Run、归属记录及新旧两种状态文件，才准备工作区并运行 `comet state init <name> full --isolation <selected-isolation>`；格式异常或归属冲突时停止，不覆盖。随后选择 change 并运行 `comet state check <name> open`。
 2. 运行 `comet classic openspec --agent-json -- status --change "<name>" --json`，重新验证 `changeRoot`、核心 ID、`applyRequires`、`artifacts` 和 `missingDeps`。
 3. `done`：该产物已完成，保持原文件不变，不重复生成。
 4. `ready`：依赖已经满足，可以生成。先运行 `comet classic openspec --agent-json -- instructions <artifact-id> --change "<name>" --json`，按返回内容写入；写完后用 `comet state artifacts <name> --json` 做本地闭包校验，不重新运行 status。

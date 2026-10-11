@@ -1,9 +1,10 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../domains/workflow-contract/workspace-runtime.js';
 import { fixtureAcceptanceReview } from '../helpers/native-builder-acceptance-review.js';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runtimeDispatchCommand } from '../../app/commands/runtime.js';
 import {
   createFileRuntimeStore,
@@ -88,6 +89,75 @@ describe('Runtime JSON command', () => {
         environment: { COMET_RUNTIME_TEST_SECRET: 'not-persisted', PATH: process.env.PATH },
       },
     );
+  }
+
+  function classicStartRequest(changeDir: string) {
+    const projected = parseClassicStateDocument({
+      workflow: 'full',
+      phase: 'open',
+      design_doc: null,
+      plan: null,
+      build_mode: null,
+      isolation: null,
+      verify_mode: null,
+      verify_result: 'pending',
+      verified_at: null,
+      archived: false,
+    });
+    if (!projected.classic) throw new Error('Classic fixture was not projected');
+    const change = path.posix.basename(changeDir);
+    return {
+      operation: 'start',
+      runId: change,
+      workflow: { id: 'comet-classic-full', version: '1' },
+      input: { change, changeDir },
+      initialState: projected.classic,
+    };
+  }
+
+  async function expectClassicRejectedWithoutWrites(request: unknown, reason: RegExp) {
+    const requestFile = path.join(invocationCwd, `request-${++requestNumber}.json`);
+    await fs.writeFile(requestFile, JSON.stringify(request));
+    const writes = (
+      [
+        'mkdir',
+        'writeFile',
+        'appendFile',
+        'rename',
+        'unlink',
+        'rm',
+        'rmdir',
+        'copyFile',
+        'symlink',
+        'link',
+        'truncate',
+      ] as const
+    ).map((method) => vi.spyOn(fs, method));
+    const opens = vi.spyOn(fs, 'open');
+    try {
+      const result = await runtimeDispatchCommand(
+        { request: requestFile, projectRoot, application: 'classic-full' },
+        { invocationCwd },
+      );
+      expect(result.response).toMatchObject({
+        status: 'failed',
+        error: { message: expect.stringMatching(reason) },
+      });
+      for (const write of writes) expect(write).not.toHaveBeenCalled();
+      const writeFlags =
+        fsConstants.O_WRONLY |
+        fsConstants.O_RDWR |
+        fsConstants.O_CREAT |
+        fsConstants.O_TRUNC |
+        fsConstants.O_APPEND;
+      expect(
+        opens.mock.calls.filter(([, flags]) =>
+          typeof flags === 'string' ? /[wa+]/u.test(flags) : (flags & writeFlags) !== 0,
+        ),
+      ).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+    }
   }
 
   async function initializeNativeLinkedSdk(name: string): Promise<string> {
@@ -348,7 +418,7 @@ describe('Runtime JSON command', () => {
     });
     const stored = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'native'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'native'),
       }),
       workflows: [],
     });
@@ -365,9 +435,7 @@ describe('Runtime JSON command', () => {
       JSON.parse(
         await fs.readFile(
           path.join(
-            projectRoot,
-            '.comet',
-            'runtime',
+            resolveWorkspaceRuntimeRootSync(projectRoot),
             'change-owners',
             'native',
             'native-change.json',
@@ -622,7 +690,7 @@ describe('Runtime JSON command', () => {
       'openspec',
       'changes',
       'linked-sdk',
-      '.comet.yaml',
+      'comet-state.yaml',
     );
     const stateSource = await fs.readFile(stateFile, 'utf8');
     expect(stateSource).toContain('auto_transition: true');
@@ -662,11 +730,11 @@ describe('Runtime JSON command', () => {
       status: 'succeeded',
       data: { actions: [{ id: action.id, status: 'running' }] },
     });
-    await expect(
-      fs.access(
-        path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic', 'linked-sdk.json'),
-      ),
-    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(
+      await createFileRuntimeStore<WorkflowRun>({
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
+      }).read('linked-sdk'),
+    ).toBeNull();
   });
 
   it('claims a Native SDK Action in a linked worktree when dispatched from the primary worktree', async () => {
@@ -697,11 +765,11 @@ describe('Runtime JSON command', () => {
       status: 'succeeded',
       data: { actions: [{ id: action.id, status: 'running' }] },
     });
-    await expect(
-      fs.access(
-        path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'native', 'native-linked.json'),
-      ),
-    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(
+      await createFileRuntimeStore<WorkflowRun>({
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'native'),
+      }).read('native-linked'),
+    ).toBeNull();
   });
 
   it('does not claim a linked Native SDK Action over an unregistered local legacy change', async () => {
@@ -718,7 +786,12 @@ describe('Runtime JSON command', () => {
     ]);
     expect(legacy.exitCode, legacy.stderr).toBe(0);
     await fs.unlink(
-      path.join(projectRoot, '.comet', 'runtime', 'change-owners', 'native', `${name}.json`),
+      path.join(
+        resolveWorkspaceRuntimeRootSync(projectRoot),
+        'change-owners',
+        'native',
+        `${name}.json`,
+      ),
     );
     const inspected = await dispatch(
       { operation: 'inspect', runId: name },
@@ -769,9 +842,11 @@ describe('Runtime JSON command', () => {
       { application: 'native', workflow: [], rootDir: undefined },
     );
     expect(result.response).toMatchObject({ status: 'failed' });
-    await expect(
-      fs.access(path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'other-run.json')),
-    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(
+      await createFileRuntimeStore<WorkflowRun>({
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'native'),
+      }).read('other-run'),
+    ).toBeNull();
   });
 
   it('requires an explicit change ID before reserving a built-in SDK owner', async () => {
@@ -791,7 +866,7 @@ describe('Runtime JSON command', () => {
     );
     expect(result.response).toMatchObject({ status: 'failed', error: { code: 'INVALID_REQUEST' } });
     await expect(
-      fs.access(path.join(projectRoot, '.comet', 'runtime', 'change-owners')),
+      fs.access(path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'change-owners')),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -813,9 +888,7 @@ describe('Runtime JSON command', () => {
     await expect(
       fs.access(
         path.join(
-          projectRoot,
-          '.comet',
-          'runtime',
+          resolveWorkspaceRuntimeRootSync(projectRoot),
           'change-owners',
           'native',
           'native-change.json',
@@ -828,7 +901,7 @@ describe('Runtime JSON command', () => {
     const application = defineNativeWorkflowApplication();
     const stored = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'native'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'native'),
       }),
       workflows: [application.workflow],
       transitionHandlers: [application.transitionHandler],
@@ -860,9 +933,7 @@ describe('Runtime JSON command', () => {
     await expect(
       fs.access(
         path.join(
-          projectRoot,
-          '.comet',
-          'runtime',
+          resolveWorkspaceRuntimeRootSync(projectRoot),
           'change-owners',
           'native',
           'native-change.json',
@@ -936,9 +1007,7 @@ describe('Runtime JSON command', () => {
       await expect(
         fs.access(
           path.join(
-            projectRoot,
-            '.comet',
-            'runtime',
+            resolveWorkspaceRuntimeRootSync(projectRoot),
             'change-owners',
             'native',
             'native-change.json',
@@ -979,9 +1048,7 @@ describe('Runtime JSON command', () => {
       JSON.parse(
         await fs.readFile(
           path.join(
-            projectRoot,
-            '.comet',
-            'runtime',
+            resolveWorkspaceRuntimeRootSync(projectRoot),
             'change-owners',
             'native',
             'native-change.json',
@@ -1009,9 +1076,7 @@ describe('Runtime JSON command', () => {
     ]);
     expect(created.exitCode).toBe(0);
     const ownerFile = path.join(
-      projectRoot,
-      '.comet',
-      'runtime',
+      resolveWorkspaceRuntimeRootSync(projectRoot),
       'change-owners',
       'native',
       'native-change.json',
@@ -1253,6 +1318,146 @@ describe('Runtime JSON command', () => {
     },
   );
 
+  it.each(
+    ['openspec', 'docs/openspec'].flatMap((base) =>
+      ['double-file', 'double-dangling-symlink', 'single-symlink'].map((kind) => ({
+        base,
+        kind,
+      })),
+    ),
+  )('rejects Classic $base $kind before raw start writes', async ({ base, kind }) => {
+    const changeDirRef = `${base}/changes/classic-change`;
+    const directory = path.join(projectRoot, changeDirRef);
+    const modern = path.join(directory, 'comet-state.yaml');
+    const legacy = path.join(directory, '.comet.yaml');
+    await fs.mkdir(directory, { recursive: true });
+    if (kind === 'single-symlink') {
+      const outside = path.join(root, 'saved-state.yaml');
+      await fs.writeFile(outside, 'workflow: full\nphase: open\n');
+      await fs.symlink(outside, modern);
+    } else {
+      await fs.writeFile(modern, 'workflow: full\nphase: open\n');
+      if (kind === 'double-file') await fs.copyFile(modern, legacy);
+      else await fs.symlink(path.join(root, 'missing-state.yaml'), legacy);
+    }
+    await expectClassicRejectedWithoutWrites(
+      classicStartRequest(changeDirRef),
+      kind === 'single-symlink' ? /regular file/u : /ambiguous/u,
+    );
+    await expect(fs.lstat(resolveWorkspaceRuntimeRootSync(projectRoot))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(fs.lstat(path.join(projectRoot, '.comet', 'runtime'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it.each(['classic-change', '2026-10-11-classic-change'])(
+    'rejects conflicting Classic archive %s before raw start writes',
+    async (archiveName) => {
+      const directory = path.join(projectRoot, 'openspec', 'changes', 'archive', archiveName);
+      await fs.mkdir(directory, { recursive: true });
+      for (const file of ['comet-state.yaml', '.comet.yaml']) {
+        await fs.writeFile(path.join(directory, file), 'workflow: full\nphase: archive\n');
+      }
+      await expectClassicRejectedWithoutWrites(
+        classicStartRequest('openspec/changes/classic-change'),
+        /ambiguous/u,
+      );
+      await expect(fs.lstat(resolveWorkspaceRuntimeRootSync(projectRoot))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    },
+  );
+
+  it('rejects conflicting Classic state files before raw inspect writes', async () => {
+    const changeDirRef = 'openspec/changes/classic-change';
+    const directory = path.join(projectRoot, changeDirRef);
+    await fs.mkdir(directory, { recursive: true });
+    const started = await dispatch(classicStartRequest(changeDirRef), {
+      application: 'classic-full',
+      workflow: [],
+      rootDir: undefined,
+    });
+    expect(started.response.status, JSON.stringify(started.response)).toBe('succeeded');
+    const inspected = await dispatch(
+      { operation: 'inspect', runId: 'classic-change' },
+      { application: 'classic-full', workflow: [], rootDir: undefined },
+    );
+    expect(inspected.response.status, JSON.stringify(inspected.response)).toBe('succeeded');
+    const modern = path.join(directory, 'comet-state.yaml');
+    const source = await fs.readFile(modern, 'utf8');
+    await fs.copyFile(modern, path.join(directory, '.comet.yaml'));
+    const backing = createFileRuntimeStore<WorkflowRun>({
+      rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
+    });
+    const before = await backing.read('classic-change');
+    await expectClassicRejectedWithoutWrites(
+      { operation: 'inspect', runId: 'classic-change' },
+      /ambiguous/u,
+    );
+    expect(await backing.read('classic-change')).toEqual(before);
+    expect(await fs.readFile(modern, 'utf8')).toBe(source);
+    expect(await fs.readFile(path.join(directory, '.comet.yaml'), 'utf8')).toBe(source);
+  });
+
+  it.each([false, true])(
+    'rejects a linked Classic conflict before any Runtime writes (primary config=%s)',
+    async (configuredPrimary) => {
+      execFileSync('git', ['init', '-b', 'main', projectRoot]);
+      execFileSync('git', ['-C', projectRoot, 'config', 'user.name', 'Comet Test']);
+      execFileSync('git', ['-C', projectRoot, 'config', 'user.email', 'comet@example.test']);
+      await fs.writeFile(path.join(projectRoot, 'README.md'), '# Classic project\n');
+      execFileSync('git', ['-C', projectRoot, 'add', '.']);
+      execFileSync('git', ['-C', projectRoot, 'commit', '-m', 'initial']);
+      const linkedRoot = path.join(root, 'linked-unsafe-worktree');
+      const branch = 'comet/linked-unsafe';
+      execFileSync('git', ['-C', projectRoot, 'worktree', 'add', '-b', branch, linkedRoot]);
+      if (configuredPrimary) {
+        await fs.mkdir(path.join(projectRoot, '.comet'), { recursive: true });
+        await fs.writeFile(
+          path.join(projectRoot, '.comet', 'config.yaml'),
+          'schema: comet.project.v1\ndefault_workflow: classic\nworkflows: [classic]\nclassic:\n  artifact_layout: legacy\n',
+        );
+        await fs.mkdir(path.join(projectRoot, 'openspec', 'changes'), { recursive: true });
+      }
+      await fs.mkdir(path.join(linkedRoot, '.comet'), { recursive: true });
+      await fs.writeFile(
+        path.join(linkedRoot, '.comet', 'config.yaml'),
+        'schema: comet.project.v1\ndefault_workflow: classic\nworkflows: [classic]\nclassic:\n  artifact_layout: legacy\n',
+      );
+      await fs.mkdir(path.join(linkedRoot, 'openspec', 'changes', 'linked-unsafe'), {
+        recursive: true,
+      });
+      const request = classicStartRequest('openspec/changes/linked-unsafe');
+      request.initialState.isolation = 'worktree';
+      request.initialState.boundBranch = branch;
+      const started = await dispatch(request, {
+        application: 'classic-full',
+        workflow: [],
+        rootDir: undefined,
+        projectRoot: linkedRoot,
+      });
+      expect(started.response.status, JSON.stringify(started.response)).toBe('succeeded');
+      const alternate = path.join(linkedRoot, 'docs', 'openspec', 'changes', 'linked-unsafe');
+      await fs.mkdir(alternate, { recursive: true });
+      for (const file of ['comet-state.yaml', '.comet.yaml']) {
+        await fs.writeFile(path.join(alternate, file), 'workflow: full\nphase: open\n');
+      }
+      const runtimeRoot = resolveWorkspaceRuntimeRootSync(linkedRoot);
+      const ownerFile = path.join(runtimeRoot, 'change-owners', 'classic', 'linked-unsafe.json');
+      const owner = await fs.readFile(ownerFile, 'utf8');
+      await expectClassicRejectedWithoutWrites(
+        { operation: 'inspect', runId: 'linked-unsafe' },
+        /ambiguous/u,
+      );
+      expect(await fs.readFile(ownerFile, 'utf8')).toBe(owner);
+      await expect(fs.lstat(resolveWorkspaceRuntimeRootSync(projectRoot))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    },
+  );
+
   it('prevents the legacy Classic state command from initializing an SDK-owned change', async () => {
     const projected = parseClassicStateDocument({
       workflow: 'full',
@@ -1321,9 +1526,7 @@ describe('Runtime JSON command', () => {
     await expect(
       fs.access(
         path.join(
-          projectRoot,
-          '.comet',
-          'runtime',
+          resolveWorkspaceRuntimeRootSync(projectRoot),
           'change-owners',
           'classic',
           'classic-change.json',
@@ -1334,9 +1537,7 @@ describe('Runtime JSON command', () => {
 
   it('does not reserve a Classic SDK owner while the change ownership lock is held', async () => {
     const lock = path.join(
-      projectRoot,
-      '.comet',
-      'runtime',
+      resolveWorkspaceRuntimeRootSync(projectRoot),
       'change-owners',
       'classic',
       'classic-change.lock',
@@ -1365,13 +1566,14 @@ describe('Runtime JSON command', () => {
         },
         { application: 'classic-full', workflow: [], rootDir: undefined },
       );
-      expect(result.response).toMatchObject({ status: 'failed' });
+      expect(result.response).toMatchObject({
+        status: 'failed',
+        error: { message: expect.stringContaining('Timed out waiting for file lock') },
+      });
       await expect(
         fs.access(
           path.join(
-            projectRoot,
-            '.comet',
-            'runtime',
+            resolveWorkspaceRuntimeRootSync(projectRoot),
             'change-owners',
             'classic',
             'classic-change.json',
@@ -1390,9 +1592,7 @@ describe('Runtime JSON command', () => {
     );
     await fs.mkdir(path.join(projectRoot, 'openspec', 'changes'), { recursive: true });
     const lock = path.join(
-      projectRoot,
-      '.comet',
-      'runtime',
+      resolveWorkspaceRuntimeRootSync(projectRoot),
       'change-owners',
       'classic',
       'classic-change.lock',
@@ -1439,9 +1639,7 @@ describe('Runtime JSON command', () => {
       JSON.parse(
         await fs.readFile(
           path.join(
-            projectRoot,
-            '.comet',
-            'runtime',
+            resolveWorkspaceRuntimeRootSync(projectRoot),
             'change-owners',
             'classic',
             'classic-change.json',
@@ -1477,9 +1675,7 @@ describe('Runtime JSON command', () => {
       JSON.parse(
         await fs.readFile(
           path.join(
-            projectRoot,
-            '.comet',
-            'runtime',
+            resolveWorkspaceRuntimeRootSync(projectRoot),
             'change-owners',
             'classic',
             'classic-change.json',

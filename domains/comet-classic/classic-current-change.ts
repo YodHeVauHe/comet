@@ -1,3 +1,4 @@
+import { ClassicStateFileConflictError } from './classic-state-file.js';
 import {
   clearCometCurrentSelection,
   clearCometCurrentSelectionIf,
@@ -98,6 +99,7 @@ async function validateSelectableChange(projectRoot: string, changeName: string)
   try {
     return await validateActiveChange(projectRoot, changeName);
   } catch (activeError) {
+    if (activeError instanceof ClassicStateFileConflictError) throw activeError;
     const archived = await findClassicArchiveChangeDirectory(changeName, projectRoot);
     if (!archived) throw activeError;
     const projection = await readClassicState(archived.directory, { migrate: false });
@@ -117,7 +119,7 @@ export async function selectCurrentChange(
   changeName: string,
 ): Promise<CurrentChangeSelection> {
   assertOpenSpecChangeName(changeName);
-  if (await readSdkChangeOwner(projectRoot, 'classic', changeName)) {
+  if (await readSdkChangeOwner(projectRoot, 'classic', changeName, { readOnly: true })) {
     const selection: CurrentChangeSelection = {
       schema: 'comet.selection.v2',
       workflow: 'classic',
@@ -187,7 +189,7 @@ export async function resolveCurrentChange(projectRoot: string): Promise<Current
 
   const selection = current.selection;
   try {
-    if (await readSdkChangeOwner(projectRoot, 'classic', selection.change)) {
+    if (await readSdkChangeOwner(projectRoot, 'classic', selection.change, { readOnly: true })) {
       const branch = await sdkSelectionBranch(projectRoot, selection.change);
       if (selection.branch !== null && branch !== selection.branch) {
         return {

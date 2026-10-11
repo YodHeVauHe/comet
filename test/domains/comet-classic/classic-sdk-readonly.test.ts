@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,15 +29,18 @@ async function fixture() {
     },
   );
   expect(result.exitCode, result.stdout).toBe(0);
-  const runRoot = path.join(root, '.comet/runtime/sdk-runs/classic');
+  const runRoot = path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs/classic');
   const backing = createFileRuntimeStore<WorkflowRun>({ rootDir: runRoot });
   return {
     root,
     runRoot,
     backing,
     store: createClassicSdkStateStore(root, { store: backing, readOnly: true }),
-    stateFile: path.join(root, 'openspec/changes/demo/.comet.yaml'),
-    markerFile: path.join(root, '.comet/runtime/state-projections/classic/demo.json'),
+    stateFile: path.join(root, 'openspec/changes/demo/comet-state.yaml'),
+    markerFile: path.join(
+      resolveWorkspaceRuntimeRootSync(root),
+      'state-projections/classic/demo.json',
+    ),
   };
 }
 

@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRoot } from '../workflow-contract/workspace-runtime.js';
 import path from 'node:path';
 
 import { inspectGitWorktree, resolveGitRef, samePath } from '../../platform/paths/git-worktree.js';
@@ -29,6 +30,7 @@ import {
   createNativeSdkCheckExecution,
   inspectNativeSdkCheckExecutions,
   nativeSdkCheckRuntimeRef,
+  nativeSdkCheckStorageRef,
   requestNativeSdkCheckStop,
   hasNativeSdkCheckStopRequest,
 } from './native-sdk-check-execution.js';
@@ -512,10 +514,10 @@ export const nativeSdkCheckExecutor: RuntimeExecutor = {
     preflightNativeCheckPlans(checkRoot, plans);
 
     const runtimeRef = checkRuntimeRef(run);
-    await ensureProtectedProjectDirectory(context.projectRoot, `${runtimeRef}/logs/checks`, {
+    await ensureProtectedProjectDirectory(paths.workspaceRuntimeRoot, `${runtimeRef}/logs/checks`, {
       label: 'Native SDK check logs',
     });
-    const runtimeDir = path.join(context.projectRoot, ...runtimeRef.split('/'));
+    const runtimeDir = path.join(paths.workspaceRuntimeRoot, ...runtimeRef.split('/'));
     const operationId = checkOperationId(action);
     const registration = await createNativeSdkCheckExecution({
       projectRoot: context.projectRoot,
@@ -536,7 +538,7 @@ export const nativeSdkCheckExecutor: RuntimeExecutor = {
           onSpawn: ({ pid, signal }) => registration.register(plan.id, pid, signal),
         });
         const logRef = `${runtimeRef}/${executed.logRef}`;
-        const log = await inspectProtectedProjectPath(context.projectRoot, logRef, {
+        const log = await inspectProtectedProjectPath(paths.workspaceRuntimeRoot, logRef, {
           label: 'Native SDK check log',
           expected: 'file',
         });
@@ -618,14 +620,19 @@ async function validatedCheckResults(options: {
       !Number.isSafeInteger(check.durationMs) ||
       check.durationMs < 0 ||
       (check.exitCode !== null && !Number.isSafeInteger(check.exitCode)) ||
-      check.logRef !== expectedRef ||
+      typeof check.logRef !== 'string' ||
+      nativeSdkCheckStorageRef(check.logRef) !== expectedRef ||
       typeof check.logSha256 !== 'string'
     ) {
       throw new Error('Native check receipt does not match the bound plan');
     }
-    const log = await hashProtectedProjectFile(projectRoot, check.logRef, {
-      label: 'Native SDK check log',
-    });
+    const log = await hashProtectedProjectFile(
+      await resolveWorkspaceRuntimeRoot(projectRoot),
+      nativeSdkCheckStorageRef(check.logRef),
+      {
+        label: 'Native SDK check log',
+      },
+    );
     if (log.digest !== check.logSha256) {
       throw new Error('Native check log changed after execution');
     }
@@ -650,16 +657,20 @@ async function partialCheckLogs(
     const logRef = `${checkRuntimeRef(run)}/logs/checks/${checkOperationId(action)}-${plan.id}.log`;
     if (
       !(
-        await inspectProtectedProjectPath(projectRoot, logRef, {
+        await inspectProtectedProjectPath(await resolveWorkspaceRuntimeRoot(projectRoot), logRef, {
           label: 'Native 中断检查日志',
           expected: 'file',
         })
       ).exists
     )
       continue;
-    const log = await hashProtectedProjectFile(projectRoot, logRef, {
-      label: 'Native 中断检查日志',
-    });
+    const log = await hashProtectedProjectFile(
+      await resolveWorkspaceRuntimeRoot(projectRoot),
+      logRef,
+      {
+        label: 'Native 中断检查日志',
+      },
+    );
     logs.push({ logRef, logSha256: log.digest });
   }
   return logs;
@@ -739,7 +750,12 @@ async function validateInterruptedCheckOutcome(
     interruption.plansHash !== hashRuntimeValue(plans as unknown as RuntimeValue) ||
     hashRuntimeValue(interruption.unknownCheckIds) !==
       hashRuntimeValue(plans.slice(output.checks.length).map((plan) => plan.id)) ||
-    hashRuntimeValue(interruption.partialLogs as unknown as RuntimeValue) !==
+    hashRuntimeValue(
+      interruption.partialLogs.map((entry) => ({
+        ...entry,
+        logRef: nativeSdkCheckStorageRef(entry.logRef),
+      })) as unknown as RuntimeValue,
+    ) !==
       hashRuntimeValue(
         (await partialCheckLogs(
           projectRoot,

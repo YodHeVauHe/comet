@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { randomUUID } from 'node:crypto';
 import { writeClassicSdkDesignContext } from '../../../domains/comet-classic/classic-handoff.js';
 import { execFileSync } from 'node:child_process';
@@ -11,6 +12,7 @@ import { runtimeDispatchCommand } from '../../../app/commands/runtime.js';
 import { runClassicCli } from '../../../domains/comet-classic/classic-cli.js';
 import { inspectClassicSdkRun } from '../../../domains/comet-classic/classic-sdk-status.js';
 import { prepareClassicLegacyProject } from '../../helpers/classic-project.js';
+import { createOpenSpecArchiveFixture } from '../../helpers/classic-openspec-fixture.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -387,10 +389,13 @@ describe('Classic candidate revisions', () => {
       expect(entry.nextAction).toEqual(revised.nextAction);
     }
     expect((await f.cli('state', 'check', 'example', 'build')).exitCode).not.toBe(0);
-    const projection = await fs.readFile(path.join(f.projectRoot, f.change, '.comet.yaml'), 'utf8');
+    const projection = await fs.readFile(
+      path.join(f.projectRoot, f.change, 'comet-state.yaml'),
+      'utf8',
+    );
     expect(projection).toContain('phase: design');
     await fs.rename(
-      path.join(f.projectRoot, '.comet/runtime'),
+      resolveWorkspaceRuntimeRootSync(f.projectRoot),
       path.join(f.projectRoot, '.comet/runtime-before-recovery'),
     );
     const recovered = await f.ok('state', 'next', 'example');
@@ -466,7 +471,8 @@ describe('Classic candidate revisions', () => {
   });
   it('preserves archive references after revised-plan delivery', async () => {
     const f = await fixture();
-    vi.stubEnv('COMET_OPENSPEC', path.resolve('node_modules/.bin/openspec'));
+    const openSpec = await createOpenSpecArchiveFixture(path.dirname(f.projectRoot));
+    vi.stubEnv('COMET_OPENSPEC', openSpec.command);
     vi.stubEnv('OPENSPEC_TELEMETRY', '0');
     vi.stubEnv('DO_NOT_TRACK', '1');
     await f.prepareBuild();
@@ -544,6 +550,9 @@ describe('Classic candidate revisions', () => {
       'local',
     );
     await f.ok('guard', 'example', 'archive', '--apply');
+    expect(await openSpec.invocations()).toEqual([
+      { args: ['archive', 'example', '--yes'], cwd: await fs.realpath(f.projectRoot) },
+    ]);
     const archived = (await f.inspect()).run;
     const archiveRef = (
       archived.outputs['full.archive.execute'].value as { archiveDirectory: string }
@@ -555,7 +564,7 @@ describe('Classic candidate revisions', () => {
       verificationReport: report,
     });
     const projected = parseYaml(
-      await fs.readFile(path.join(f.projectRoot, archiveRef, '.comet.yaml'), 'utf8'),
+      await fs.readFile(path.join(f.projectRoot, archiveRef, 'comet-state.yaml'), 'utf8'),
     );
     expect(projected.design_doc).toBe(`${archiveRef}/design.md`);
     expect(projected.handoff_context).toBe(`${archiveRef}/.comet/handoff/design-context.json`);

@@ -2,13 +2,15 @@
 
 状态：Native 与 Classic 新 change 的 SDK 接入、原状态文件投影和活跃 change 跨设备恢复已实现。当前接口以 [Runtime SDK 文档](./runtime-sdk.zh.md) 和源码为准；本文件后文保留设计目标与验收条件，真实平台与模型 Eval 仍需单独验收。
 
-新建 Native change 和 Classic full/hotfix/tweak change 默认创建 SDK Run；旧 change 继续由原 Runtime 管理，不自动迁移。两套应用使用同一 SDK 内核的 Run、Action、Wait、命令、证据与恢复机制，各自保留领域状态机。Native 的公开 new/status/select/next/spec remove/Archive/Doctor 已按持久化归属路由；Classic 的公开 state、Guard、check、workspace、交付入口按 SDK 归属推进。新 change 仍在原位置保存 Native `comet-state.yaml` 或 Classic `.comet.yaml`，并随 change 归档；状态文件新增 Runtime 管理的 `run_checkpoint` 字段，保存跨设备恢复所需的 Run 事实，原有阶段字段和读取路径不变。复制状态文件、文档和代码到新设备后，普通 Native 与 Classic change 可从已保存的阶段、Action 和确认继续，本机执行记录会重新建立；结果未明的外部动作需要先核对，不会自动重放。Supervisor Child 的独立 worktree 与未提交代码不包含在父 change 状态文件中，不能仅凭该文件自动接管；可按下述步骤显式转移。旧状态文件若没有检查点，则无法精确恢复；显式确认后可保留正式文档并分别从 Shape 或 Open 重新开始。
+新建 Native change 和 Classic full/hotfix/tweak change 默认创建 SDK Run；旧 change 继续由原 Runtime 管理，不自动迁移。两套应用使用同一 SDK 内核的 Run、Action、Wait、命令、证据与恢复机制，各自保留领域状态机。Native 的公开 new/status/select/next/spec remove/Archive/Doctor 已按持久化归属路由；Classic 的公开 state、Guard、check、workspace、交付入口按 SDK 归属推进。新 change 仍在原位置保存 `comet-state.yaml`（Classic 历史 `.comet.yaml` 原地兼容），并随 change 归档；状态文件新增 Runtime 管理的 `run_checkpoint` 字段，保存跨设备恢复所需的 Run 事实，原有阶段字段和读取路径不变。将实际状态文件、文档、引用工件、代码和项目配置一起复制到新设备后，普通 Native 与 Classic change 可从已保存的阶段、Action 和确认继续，本机执行记录会重新建立；结果未明的外部动作需要先核对，不会自动重放。Supervisor Child 的独立 worktree 与未提交代码不包含在父 change 状态文件中，不能仅凭该文件自动接管；可按下述步骤显式转移。旧状态文件若没有检查点，则无法精确恢复；显式确认后可保留正式文档并分别从 Shape 或 Open 重新开始。
 
 跨设备转移进行中的 Supervisor Child Builder 时，先停止原设备上的 Supervisor 与 Child Agent，再在原项目执行 `comet native transfer export <change> --output <新目录> --confirmed-stopped`。将整个私有目录复制到目标设备；它包含父 change 文件、临时分支的 Git bundle、各 worktree 的已跟踪修改补丁与原始文件字节，以及非忽略的未跟踪文件，可能包含源代码或敏感内容。目标设备需有同一项目的 Git 检出、相同的项目配置，且目标分支仍指向导出时的提交。执行 `comet native transfer import --input <目录>` 后，Runtime 在目标检出中恢复 Child 与集成 worktree、父状态文件和 SDK Run，并记录原始与导入后的 checkpoint 哈希。原设备已领取但未提交结果的 Builder 在目标设备保持 `unknown`，需检查转移的代码并核对结果后再继续；导入不会把它视为完成，也不会自动重放。当前仅支持 Child Builder 阶段、尚未进入 Child 检查或集成的 Supervisor；忽略文件和外部依赖不在转移包内。目标项目若已有同名 change、目标分支漂移或包内容不匹配，导入会拒绝。只复制父状态文件仍会因缺少 Child worktree 而停止恢复。
 
 本地自动化覆盖 Native 普通 change、Supervisor 双 Child，以及 Classic full/hotfix/tweak 的关键路径、失败/未知结果与跨 worktree 归属。全量测试、生成 Runtime、发布包 E2E、真实平台 Hook、宿主交接和模型 Eval 需要分别记录当前候选的结果，不能沿用旧候选的通过结论；正在运行、超时或证据缺失的项目仍未完成。新 change 默认创建 SDK Run，并在原路径保留状态文件；显式创建原 Runtime change 时使用 `--runtime compat`，未发布的 `--runtime legacy` 不保留。显式迁移旧 change 尚未实现；是否提供迁移命令应按真实需求单独决定，不是默认切换的前置条件。
 
 当前跨设备恢复覆盖活跃 change，以及 Classic 已移动、结果未提交的 Archive 和待交付的归档 change。Classic 可在确认原执行者停止后使用 `comet archive <change> --recover` 核对原 Action、归档目录及工件要求；不会再次运行 OpenSpec Archive。Native 可从归档状态文件恢复已完成文件移动但结果未提交的 Archive Action；归档凭据随状态文件保存，恢复时还会核对验证报告与 canonical Specs。已启动的 Supervisor 协作仍需单独核对，未解决的外部执行保持结果待核对，不能用重建本机记录绕过。
+
+本机运行状态的目录、旧状态迁移、SDK 文件压缩与跨设备边界见[本机 Runtime 存储说明](./runtime-local-storage.zh.md)。存储位置迁移不改变 change 的 SDK/compat 运行格式，也不会自动重放结果未知的动作。
 
 ## 目标与现状
 

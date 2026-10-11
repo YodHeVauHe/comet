@@ -1,3 +1,4 @@
+import { isClassicStateFileName } from './classic-state-file.js';
 import { measureCometGitCommand } from '../../platform/process/runtime-metrics.js';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -231,9 +232,12 @@ export async function collectCheckSnapshot(
       matches(path.relative(root, absolute).replaceAll('\\', '/')),
     ) ||
     processHomeRoots.some((home) => absolute === home || absolute.startsWith(home + path.sep)) ||
-    absolute === path.join(changeDir, '.comet.yaml') ||
+    (path.dirname(absolute) === changeDir && isClassicStateFileName(path.basename(absolute))) ||
     absolute === path.join(changeDir, '.comet-state.lock') ||
     absolute === path.join(changeDir, '.comet-state-transaction.json') ||
+    absolute === path.join(changeDir, '.comet-state.lock', '.comet-runtime-migration.json') ||
+    absolute ===
+      path.join(changeDir, '.comet-state-transaction.json', '.comet-runtime-migration.json') ||
     absolute.startsWith(path.join(changeDir, '.comet') + path.sep) ||
     absolute === runtimeRecords ||
     absolute.startsWith(runtimeRecords + path.sep) ||

@@ -1,3 +1,4 @@
+import { resolveClassicRunDirectory } from '../../../domains/comet-classic/classic-runtime-paths.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'fs';
 import os from 'os';
@@ -316,7 +317,9 @@ describe('Classic runtime CLI adapter', () => {
       const changeDir = path.join(directory, 'openspec', 'changes', 'demo');
 
       await expect(ensureClassicRuntimeRun(changeDir)).resolves.toBeDefined();
-      await expect(readRunState(changeDir)).resolves.toMatchObject({ skill: 'comet-classic' });
+      await expect(
+        readRunState(await resolveClassicRunDirectory(changeDir)),
+      ).resolves.toMatchObject({ skill: 'comet-classic' });
     } finally {
       process.chdir(previous);
       if (previousRoot === undefined) delete process.env.COMET_RUNTIME_CLASSIC_ROOT;
@@ -385,7 +388,9 @@ describe('Classic runtime CLI adapter', () => {
       expect((await runClassicCli(['state', 'transition', 'demo', 'open-complete'])).exitCode).toBe(
         0,
       );
-      await expect(readRunState(changeDir)).resolves.toMatchObject({
+      await expect(
+        readRunState(await resolveClassicRunDirectory(changeDir)),
+      ).resolves.toMatchObject({
         currentStep: 'tweak.build.execute',
       });
 
@@ -408,7 +413,9 @@ describe('Classic runtime CLI adapter', () => {
       expect(result.stderr).toContain(
         '[RECONCILED] currentStep tweak.build.execute -> tweak.build.complete',
       );
-      await expect(readRunState(changeDir)).resolves.toMatchObject({
+      await expect(
+        readRunState(await resolveClassicRunDirectory(changeDir)),
+      ).resolves.toMatchObject({
         currentStep: 'tweak.build.complete',
       });
 
@@ -490,7 +497,11 @@ describe('Classic runtime CLI adapter', () => {
         );
         await fs.writeFile(yamlPath, yaml);
       } else {
-        const runPath = path.join(changeDir, '.comet', 'run-state.json');
+        const runPath = path.join(
+          await resolveClassicRunDirectory(changeDir),
+          '.comet',
+          'run-state.json',
+        );
         const run = JSON.parse(await fs.readFile(runPath, 'utf8'));
         run.skill = 'not-comet-classic';
         await fs.writeFile(runPath, `${JSON.stringify(run, null, 2)}\n`);
@@ -876,7 +887,7 @@ describe('Classic script bundles', () => {
       cwd: directory,
       encoding: 'utf8',
     });
-    const runState = await readRunState(changeDir);
+    const runState = await readRunState(await resolveClassicRunDirectory(changeDir));
 
     expect(set.status).toBe(0);
     expect(runState).not.toBeNull();

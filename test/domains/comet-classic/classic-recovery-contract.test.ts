@@ -1,3 +1,4 @@
+import { readClassicProjectFile } from '../../../domains/comet-classic/classic-protected-path.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -209,9 +210,11 @@ describe('Classic compact recovery and task reconciliation', () => {
     });
     expect(data.coordination.checkpoint).toBeUndefined();
     expect(data.checkpoint.content).toBeUndefined();
-    expect(await fs.readFile(path.join(change, '.comet/subagent-progress.md'), 'utf8')).toContain(
-      'task-review',
-    );
+    expect(
+      await readClassicProjectFile(root, path.join(change, '.comet/subagent-progress.md'), {
+        label: 'Recovery checkpoint',
+      }),
+    ).toContain('task-review');
     const changed = tasks.replace('existing implementation', 'new requirements');
     await fs.writeFile(path.join(change, 'tasks.md'), changed);
     const stale = JSON.parse(

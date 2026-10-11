@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { fixtureAcceptanceReview } from '../../helpers/native-builder-acceptance-review.js';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -9,6 +10,7 @@ import { runNativeCli } from '../../../domains/comet-native/native-cli.js';
 import { archiveNativePortableChange } from '../../../domains/comet-native/native-portable-archive.js';
 import { nativeProjectPaths } from '../../../domains/comet-native/native-paths.js';
 import { nativeWorkspaceIsClean } from '../../../domains/comet-native/native-workspace-config.js';
+import { ensureCometProjectGitignore } from '../../../domains/workflow-contract/project-gitignore.js';
 
 const roots: string[] = [];
 const git = (root: string, args: string[]) =>
@@ -94,10 +96,7 @@ async function repository() {
   git(root, ['init', '-b', 'main']);
   git(root, ['config', 'user.name', 'Native Test']);
   git(root, ['config', 'user.email', 'native@example.test']);
-  await fs.writeFile(
-    path.join(root, '.gitignore'),
-    '.comet/runtime/\n.comet/current-change.json\n',
-  );
+  await ensureCometProjectGitignore(root);
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'seed']);
   return root;
@@ -280,8 +279,8 @@ describe('Native public user-option paths', () => {
       // Simulate an upgrade from the old target binding, then loss of the
       // machine overlay. Both recover from the real portable/Git state.
       const supervisorFile = path.join(
-        root,
-        '.comet/runtime/native/changes/parent/supervisor/state.json',
+        resolveWorkspaceRuntimeRootSync(root),
+        'native/changes/parent/supervisor/state.json',
       );
       const legacySupervisor = JSON.parse(await fs.readFile(supervisorFile, 'utf8'));
       legacySupervisor.integration.targetBranch = 'main';

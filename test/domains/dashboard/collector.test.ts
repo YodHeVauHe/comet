@@ -1,3 +1,5 @@
+import * as nativeCollector from '../../../domains/dashboard/native-collector.js';
+import { writeClassicProjectText } from '../../../domains/comet-classic/classic-protected-path.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'fs';
@@ -13,6 +15,7 @@ import {
 interface ChangeFixture {
   name: string;
   yaml?: Record<string, string>;
+  stateFileName?: 'comet-state.yaml' | '.comet.yaml';
   tasks?: string;
   proposal?: boolean;
   design?: boolean;
@@ -33,7 +36,10 @@ async function writeChange(root: string, fixture: ChangeFixture): Promise<void> 
 
   if (fixture.yaml) {
     const lines = Object.entries(fixture.yaml).map(([k, v]) => `${k}: ${v}`);
-    await fs.writeFile(path.join(baseDir, '.comet.yaml'), `${lines.join('\n')}\n`);
+    await fs.writeFile(
+      path.join(baseDir, fixture.stateFileName ?? '.comet.yaml'),
+      `${lines.join('\n')}\n`,
+    );
   }
   if (fixture.tasks !== undefined) {
     await fs.writeFile(path.join(baseDir, 'tasks.md'), fixture.tasks);
@@ -73,6 +79,149 @@ describe('collectDashboardSnapshot', () => {
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  it('shows Classic checkpoint and progress from user Runtime without recreating project records', async () => {
+    await writeChange(root, {
+      name: 'local-runtime-preview',
+      yaml: { phase: 'build', workflow: 'classic' },
+    });
+    const change = path.join(root, 'openspec/changes/local-runtime-preview');
+    const checkpoint = path.join(change, '.comet/checkpoint.json');
+    const progress = path.join(change, '.comet/subagent-progress.md');
+    await writeClassicProjectText(root, checkpoint, '{"summary":"retained checkpoint"}\n', {
+      label: 'test checkpoint',
+    });
+    await writeClassicProjectText(root, progress, '# Child progress\nStill working.\n', {
+      label: 'test progress',
+    });
+    await expect(fs.access(checkpoint)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.access(progress)).rejects.toMatchObject({ code: 'ENOENT' });
+    const detail = await collectDashboardChangeDetail(
+      root,
+      'openspec/changes/local-runtime-preview',
+    );
+    const previews = detail.artifactPreviews!;
+    expect(previews.find((item) => item.key === 'checkpoint')).toMatchObject({
+      exists: true,
+      content: '{"summary":"retained checkpoint"}\n',
+    });
+    expect(previews.find((item) => item.key === 'subagentProgress')).toMatchObject({
+      exists: true,
+      content: '# Child progress\nStill working.\n',
+    });
+  });
+
+  it.each([
+    ['comet-state.yaml', 'openspec/changes'],
+    ['.comet.yaml', 'openspec/changes'],
+    ['comet-state.yaml', 'docs/openspec/changes'],
+    ['.comet.yaml', 'docs/openspec/changes'],
+  ] as const)(
+    'reads %s in %s across Classic dashboard views',
+    async (stateFileName, changesPath) => {
+      await writeChange(root, {
+        name: 'active-state',
+        stateFileName,
+        changesPath,
+        yaml: { phase: 'build', workflow: 'full' },
+      });
+      await writeChange(root, {
+        name: '2026-10-11-archived-state',
+        stateFileName,
+        changesPath,
+        status: 'archived',
+        yaml: { phase: 'archive', workflow: 'full', archived: 'true' },
+      });
+      const snapshot = await collectDashboardSnapshot(root);
+      expect(snapshot.classicError).toBeUndefined();
+      expect(snapshot.changes.active[0]).toMatchObject({
+        name: 'active-state',
+        phase: 'build',
+        artifacts: { cometYaml: true },
+      });
+      expect(snapshot.changes.archived[0].artifacts.cometYaml).toBe(true);
+      const overview = await collectDashboardOverview(root);
+      expect(overview.classicError).toBeUndefined();
+      expect(overview.summary).toMatchObject({ activeChanges: 1, archivedChanges: 1 });
+      const page = await collectDashboardChangePage(root, { status: 'all' });
+      expect(page.total).toBe(2);
+      const detail = await collectDashboardChangeDetail(root, `${changesPath}/active-state`);
+      expect(detail?.artifacts.grouped).toContainEqual(
+        expect.objectContaining({
+          key: 'cometYaml',
+          label: stateFileName,
+          path: path.join(root, ...changesPath.split('/'), 'active-state', stateFileName),
+          exists: true,
+        }),
+      );
+    },
+  );
+
+  it.each(['file', 'dangling-symlink'] as const)(
+    'surfaces conflicting Classic state names including a %s without writes',
+    async (legacyKind) => {
+      await writeChange(root, {
+        name: 'healthy',
+        yaml: { phase: 'build' },
+        stateFileName: 'comet-state.yaml',
+      });
+      await writeChange(root, {
+        name: 'conflict',
+        yaml: { phase: 'build' },
+        stateFileName: 'comet-state.yaml',
+      });
+      const changeDir = path.join(root, 'openspec/changes/conflict');
+      const legacyPath = path.join(changeDir, '.comet.yaml');
+      if (legacyKind === 'file') {
+        await fs.writeFile(legacyPath, 'phase: verify\n');
+      } else {
+        try {
+          await fs.symlink('missing-state.yaml', legacyPath, 'file');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+          throw error;
+        }
+      }
+      const before = await fs.readFile(path.join(changeDir, 'comet-state.yaml'));
+      // 隔离 Native 的独立索引缓存，只观察 Classic 收集与状态文件的读写。
+      const nativeReads = [
+        vi.spyOn(nativeCollector, 'collectNativeDashboardProjection').mockResolvedValue(null),
+        vi.spyOn(nativeCollector, 'collectNativeDashboardOverview').mockResolvedValue(null),
+      ];
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const writes = [
+        vi.spyOn(fs, 'mkdir'),
+        vi.spyOn(fs, 'writeFile'),
+        vi.spyOn(fs, 'rename'),
+        vi.spyOn(fs, 'unlink'),
+      ];
+      try {
+        const snapshot = await collectDashboardSnapshot(root);
+        expect(snapshot.changes.active.map((change) => change.name)).toEqual(['healthy']);
+        expect(snapshot.classicError?.message).toMatch(/comet-state\.yaml.*\.comet\.yaml/u);
+        const overview = await collectDashboardOverview(root);
+        expect(overview.initialChanges.items.map((change) => change.name)).toEqual(['healthy']);
+        expect(overview.classicError?.message).toMatch(/comet-state\.yaml.*\.comet\.yaml/u);
+        await expect(collectDashboardChangePage(root, { status: 'active' })).rejects.toThrow(
+          /comet-state\.yaml.*\.comet\.yaml/u,
+        );
+        await expect(
+          collectDashboardChangeDetail(root, 'openspec/changes/conflict'),
+        ).rejects.toThrow(/comet-state\.yaml.*\.comet\.yaml/u);
+        for (const write of writes) expect(write).not.toHaveBeenCalled();
+        expect(await fs.readFile(path.join(changeDir, 'comet-state.yaml'))).toEqual(before);
+        if (legacyKind === 'file') {
+          expect(await fs.readFile(legacyPath, 'utf8')).toBe('phase: verify\n');
+        } else {
+          expect(await fs.readlink(legacyPath)).toBe('missing-state.yaml');
+        }
+      } finally {
+        warn.mockRestore();
+        for (const write of writes) write.mockRestore();
+        for (const read of nativeReads) read.mockRestore();
+      }
+    },
+  );
 
   it('treats missing Classic roots as an empty state without configuration', async () => {
     const snap = await collectDashboardSnapshot(root);
@@ -656,6 +805,7 @@ describe('collectDashboardSnapshot', () => {
     await writeChange(root, {
       name: 'docs-cleanup',
       yaml: { phase: 'design', workflow: 'full' },
+      tasks: '- [x] outline\n',
       proposal: true,
     });
     await writeChange(root, {

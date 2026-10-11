@@ -10,7 +10,7 @@
 ├── changes/
 │   ├── <name>/                        # 活跃 change
 │   │   ├── .openspec.yaml
-│   │   ├── .comet.yaml
+│   │   ├── comet-state.yaml
 │   │   ├── proposal.md                # 变更原因、目标与范围
 │   │   ├── design.md                  # 高层架构决策
 │   │   ├── specs/<capability>/spec.md # 本次变更对能力规格的增量修改（delta spec）
@@ -26,3 +26,5 @@
 .comet/
 └── config.yaml                        # Comet 项目配置（context_compression 默认 off，可设 beta）
 ```
+
+Classic SDK 新 change 使用 `comet-state.yaml`；历史 `.comet.yaml` 原地兼容，compat 初始化继续使用旧名。两种文件不能同时存在，包括其中一个是失效符号链接的情况。

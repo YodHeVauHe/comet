@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { fixtureAcceptanceReview } from '../../helpers/native-builder-acceptance-review.js';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -100,7 +101,7 @@ describe('Native v4 public CLI surface', () => {
     expect(status.exitCode, status.error?.message).toBe(0);
     const sdk = createRuntime({
       store: createFileRuntimeStore<WorkflowRun>({
-        rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'native'),
+        rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'native'),
       }),
       workflows: [],
     });
@@ -674,7 +675,12 @@ Run the focused checks.
     });
     await expect(
       fs.access(
-        path.join(projectRoot, '.comet', 'runtime', 'change-owners', 'native', 'second-sdk.json'),
+        path.join(
+          resolveWorkspaceRuntimeRootSync(projectRoot),
+          'change-owners',
+          'native',
+          'second-sdk.json',
+        ),
       ),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -699,7 +705,12 @@ Run the focused checks.
     });
     await expect(
       fs.access(
-        path.join(projectRoot, '.comet', 'runtime', 'change-owners', 'native', 'second-sdk.json'),
+        path.join(
+          resolveWorkspaceRuntimeRootSync(projectRoot),
+          'change-owners',
+          'native',
+          'second-sdk.json',
+        ),
       ),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -3279,7 +3290,10 @@ Run applicable focused checks.
 
   it('dispatches after handoff checks and reuses them for the same Verifier', async () => {
     const name = 'handoff-runtime-check-reuse';
-    const counter = path.join(projectRoot, '.comet', 'runtime', 'handoff-check-count.txt');
+    const counter = path.join(
+      resolveWorkspaceRuntimeRootSync(projectRoot),
+      'handoff-check-count.txt',
+    );
     const verificationCheck = {
       id: 'runtime-pass',
       name: 'Runtime pass',

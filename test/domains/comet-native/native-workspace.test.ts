@@ -281,7 +281,7 @@ describe('Native workspace identity', () => {
       name: 'example',
       revision: 1,
     });
-    const file = path.join(projectRoot, 'docs/comet/changes/example/runtime/workspace.json');
+    const file = nativeWorkspaceFile(paths, 'example');
 
     await fs.writeFile(file, JSON.stringify({ ...written, nativeRootRef: '../other' }));
     await expect(readNativeWorkspaceIdentity(paths, 'example')).rejects.toThrow(
@@ -294,7 +294,7 @@ describe('Native workspace identity', () => {
 
   it('ignores legacy Git-backed v1 metadata as a non-blocking advisory', async () => {
     const paths = await nativeProjectPaths(projectRoot, 'docs');
-    const file = path.join(projectRoot, 'docs/comet/changes/example/runtime/workspace.json');
+    const file = nativeWorkspaceFile(paths, 'example');
     await fs.writeFile(
       file,
       JSON.stringify({
@@ -312,7 +312,7 @@ describe('Native workspace identity', () => {
   it('rejects symlinked identity files instead of following them', async () => {
     if (process.platform === 'win32') return;
     const paths = await nativeProjectPaths(projectRoot, 'docs');
-    const file = path.join(projectRoot, 'docs/comet/changes/example/runtime/workspace.json');
+    const file = nativeWorkspaceFile(paths, 'example');
     const outside = path.join(projectRoot, 'outside.json');
     await fs.writeFile(outside, '{}');
     await fs.symlink(outside, file);

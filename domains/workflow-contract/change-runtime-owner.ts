@@ -8,6 +8,11 @@ import {
   readProtectedProjectFile,
 } from './protected-project-path.js';
 import type { CometProjectWorkflow } from './types.js';
+import {
+  resolveWorkspaceRuntimeRoot,
+  resolveWorkspaceRuntimeRootSync,
+  isWorkspaceRuntimeMigrationFence,
+} from './workspace-runtime.js';
 
 export const COMET_CHANGE_OWNER_SCHEMA = 'comet.change-owner.v1' as const;
 
@@ -44,7 +49,7 @@ function ownerRef(workflow: CometProjectWorkflow, change: string): string {
     throw new Error(`Unsupported change workflow: ${workflow}`);
   }
   if (!NAME_PATTERN.test(change)) throw new Error(`Invalid change name: ${change}`);
-  return `.comet/runtime/change-owners/${workflow}/${change}.json`;
+  return `change-owners/${workflow}/${change}.json`;
 }
 
 function parseOwner(
@@ -79,15 +84,15 @@ function parseOwner(
   return owner as unknown as ChangeRuntimeOwner;
 }
 
-export async function readChangeRuntimeOwner(
-  projectRoot: string,
+async function readOwnerFile(
+  root: string,
+  reference: string,
   workflow: CometProjectWorkflow,
   change: string,
 ): Promise<ChangeRuntimeOwner | null> {
-  const ref = ownerRef(workflow, change);
   let bytes: Buffer;
   try {
-    ({ bytes } = await readProtectedProjectFile(projectRoot, ref, 16 * 1024, {
+    ({ bytes } = await readProtectedProjectFile(root, reference, 16 * 1024, {
       label: 'change runtime owner',
     }));
   } catch (error) {
@@ -103,12 +108,58 @@ export async function readChangeRuntimeOwner(
   return parseOwner(value, workflow, change);
 }
 
+export async function readChangeRuntimeOwner(
+  projectRoot: string,
+  workflow: CometProjectWorkflow,
+  change: string,
+  options: { readOnly?: boolean } = {},
+): Promise<ChangeRuntimeOwner | null> {
+  const ref = ownerRef(workflow, change);
+  if (!options.readOnly) {
+    return readOwnerFile(await resolveWorkspaceRuntimeRoot(projectRoot), ref, workflow, change);
+  }
+  const runtimeRoot = resolveWorkspaceRuntimeRootSync(projectRoot);
+  const volume = path.parse(runtimeRoot).root;
+  const home = await inspectProtectedProjectPath(
+    volume,
+    path.relative(volume, runtimeRoot).replaceAll('\\', '/'),
+    {
+      label: 'read-only workspace Runtime',
+      expected: 'directory',
+    },
+  );
+  const current = home.exists ? await readOwnerFile(runtimeRoot, ref, workflow, change) : null;
+  const legacyRoot = await inspectProtectedProjectPath(projectRoot, '.comet/runtime', {
+    label: 'read-only legacy Runtime',
+    expected: 'any',
+  });
+  let legacy: ChangeRuntimeOwner | null = null;
+  if (legacyRoot.kind === 'directory') {
+    legacy = await readOwnerFile(projectRoot, `.comet/runtime/${ref}`, workflow, change);
+  } else if (
+    legacyRoot.kind === 'file' &&
+    !(await isWorkspaceRuntimeMigrationFence(legacyRoot.target))
+  ) {
+    throw new Error('Legacy Runtime path is not a valid migration fence');
+  }
+  // fence 只用于阻断旧路径；绝不跟随其中记录的外部工作区或目标目录。
+  if (
+    current &&
+    legacy &&
+    JSON.stringify(Object.entries(current).sort()) !== JSON.stringify(Object.entries(legacy).sort())
+  ) {
+    throw new Error(`Conflicting current and legacy Runtime owners for ${workflow}/${change}`);
+  }
+  return current ?? legacy;
+}
+
 export async function readSdkChangeOwner(
   projectRoot: string,
   workflow: CometProjectWorkflow,
   change: string,
+  options: { readOnly?: boolean } = {},
 ): Promise<SdkChangeOwner | null> {
-  const owner = await readChangeRuntimeOwner(projectRoot, workflow, change);
+  const owner = await readChangeRuntimeOwner(projectRoot, workflow, change, options);
   return owner?.format === 'sdk' ? owner : null;
 }
 
@@ -116,11 +167,11 @@ export async function listSdkChangeNames(
   projectRoot: string,
   workflow: CometProjectWorkflow,
 ): Promise<string[]> {
-  const directory = await inspectProtectedProjectPath(
-    projectRoot,
-    `.comet/runtime/change-owners/${workflow}`,
-    { label: `${workflow} change runtime owners`, expected: 'directory' },
-  );
+  const runtimeRoot = await resolveWorkspaceRuntimeRoot(projectRoot);
+  const directory = await inspectProtectedProjectPath(runtimeRoot, `change-owners/${workflow}`, {
+    label: `${workflow} change runtime owners`,
+    expected: 'directory',
+  });
   if (!directory.exists) return [];
   const entries = await fs.readdir(directory.target, { withFileTypes: true });
   const names: string[] = [];
@@ -142,16 +193,17 @@ async function registerChangeRuntimeOwner<T extends ChangeRuntimeOwner>(
   owner: T,
 ): Promise<T> {
   const ref = ownerRef(owner.workflow, owner.change);
+  const runtimeRoot = await resolveWorkspaceRuntimeRoot(projectRoot);
   const validated = parseOwner(owner, owner.workflow, owner.change) as T;
-  await ensureProtectedProjectDirectory(projectRoot, path.posix.dirname(ref), {
+  await ensureProtectedProjectDirectory(runtimeRoot, path.posix.dirname(ref), {
     label: 'change runtime owner directory',
   });
   try {
     await atomicWriteContainedText(
-      path.join(projectRoot, ...ref.split('/')),
+      path.join(runtimeRoot, ...ref.split('/')),
       `${JSON.stringify(validated)}\n`,
       {
-        containedRoot: projectRoot,
+        containedRoot: runtimeRoot,
         exclusive: true,
         requireAtomicPublication: true,
       },

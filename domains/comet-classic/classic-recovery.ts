@@ -1,3 +1,4 @@
+import { resolveClassicLocalTarget } from './classic-runtime-paths.js';
 import path from 'node:path';
 import type { RunState } from '../engine/types.js';
 import type { ClassicState } from './classic-state.js';
@@ -272,7 +273,17 @@ export async function classicRecoveryContext(
       ...(details ? { unmapped: mapping.unmapped } : {}),
     },
     coordination: {
-      path: coordination.checkpoint ? path.join(directory, '.comet', 'coordination.json') : null,
+      path: coordination.checkpoint
+        ? ((
+            await resolveClassicLocalTarget(
+              root,
+              path.join(directory, '.comet', 'coordination.json'),
+              {
+                migrate: false,
+              },
+            )
+          )?.target ?? path.join(directory, '.comet', 'coordination.json'))
+        : null,
       stale: coordination.stale,
       ...(coordination.checkpoint
         ? {

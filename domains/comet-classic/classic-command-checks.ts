@@ -1,7 +1,7 @@
 import path from 'path';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { appendTrajectory } from '../engine/run-store.js';
+import { appendTrajectory } from './classic-run-store.js';
 import type { RuntimeAction } from '../engine/runtime-action.js';
 import type { RunState, TrajectoryEvent } from '../engine/types.js';
 import { terminateProcessTree } from '../../platform/process/terminate-process-tree.js';
@@ -11,7 +11,11 @@ import {
   collectCheckSnapshot,
   legacyCheckInputFingerprint,
 } from './classic-check-snapshot.js';
-import { readClassicProjectFile, writeClassicProjectText } from './classic-protected-path.js';
+import {
+  inspectClassicProjectTarget,
+  readClassicProjectFile,
+  writeClassicProjectText,
+} from './classic-protected-path.js';
 import { readClassicState, withClassicStateLock } from './classic-store.js';
 import {
   completeClassicCheckAction,
@@ -265,6 +269,20 @@ export async function latestCommandCheck(
     if (record?.scope === scope) {
       if (record.action && !hasMatchingCheckStart(projectRoot, trajectory, index, record))
         return null;
+      if (path.basename(path.dirname(changeDir)) === 'archive') {
+        const name = path.basename(changeDir).replace(/^\d{4}-\d{2}-\d{2}-/u, '');
+        const archivedRef = path.relative(projectRoot, changeDir).replaceAll('\\', '/');
+        const relocate = (ref: string | undefined) => {
+          if (!ref) return ref;
+          const match = /^(?:docs\/)?openspec\/changes\/([^/]+)\/\.comet\/(checks\/.*)$/u.exec(ref);
+          return match?.[1] === name ? `${archivedRef}/.comet/${match[2]}` : ref;
+        };
+        return {
+          ...record,
+          logRef: relocate(record.logRef),
+          manifestRef: relocate(record.manifestRef),
+        };
+      }
       return record;
     }
     if (
@@ -734,7 +752,11 @@ export async function executeCommandCheck(
   )
     inputAfter = 'environment-changed';
   await writeClassicProjectText(root, logPath, result.output, { label: 'Classic check log' });
-  const logStat = await fs.stat(logPath, { bigint: true }).catch(() => null);
+  const logTarget = await inspectClassicProjectTarget(root, logPath, {
+    label: 'Classic check log',
+    expected: 'file',
+  });
+  const logStat = await fs.lstat(logTarget.target, { bigint: true }).catch(() => null);
   const data = {
     scope: input.scope,
     command: JSON.stringify(input.argv),
@@ -919,9 +941,11 @@ export async function evaluateCommandCheck(
     // An unchanged size+mtime proves the log was not rewritten since the
     // check wrote it, so rereading (up to 8 MB per scope) is skipped. Records
     // without the stat, or a changed stat, keep the full content-hash check.
-    const logStat = await fs
-      .stat(path.resolve(root, record.logRef), { bigint: true })
-      .catch(() => null);
+    const logTarget = await inspectClassicProjectTarget(root, record.logRef, {
+      label: 'Classic check log',
+      expected: 'file',
+    });
+    const logStat = await fs.lstat(logTarget.target, { bigint: true }).catch(() => null);
     const statMatches =
       typeof record.logSize === 'number' &&
       typeof record.logMtimeNs === 'string' &&

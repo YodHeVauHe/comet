@@ -23,6 +23,7 @@ vi.mock('../../../domains/comet-entry/hook-project-root.js', () => ({
 }));
 vi.mock('../../../domains/comet-entry/hook-router.js', () => ({
   inspectCometHook: mocks.inspect,
+  inspectCometRuntimeWriteTargets: async () => null,
 }));
 
 import { runCometHookRouter } from '../../../domains/comet-entry/hook-router-entry.js';

@@ -1,6 +1,8 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 
+import { inspectProtectedProjectPath } from '../workflow-contract/protected-project-path.js';
 import {
   assertClassicLayoutReadable,
   assertClassicLayoutWritable,
@@ -73,6 +75,39 @@ export function assertOpenSpecChangeName(name: string | undefined): asserts name
   if (error) throw new Error(error);
 }
 
+/** 只读检查状态文件并返回 SDK 恢复候选；不要求已有 Classic 项目配置。 */
+export async function inspectClassicStateFileCandidates(
+  projectRoot: string,
+  name: string,
+): Promise<string[]> {
+  assertOpenSpecChangeName(name);
+  const files: string[] = [];
+  const candidate = async (directory: string) => {
+    await inspectProtectedProjectPath(projectRoot, path.relative(projectRoot, directory), {
+      label: 'Classic change directory',
+      expected: 'directory',
+    });
+    return resolveClassicStateFile(directory);
+  };
+  for (const rootRef of ['openspec/changes', 'docs/openspec/changes']) {
+    files.push(await candidate(path.join(projectRoot, rootRef, name)));
+    const archive = await inspectProtectedProjectPath(projectRoot, `${rootRef}/archive`, {
+      label: 'Classic Archive directory',
+      expected: 'directory',
+    });
+    if (!archive.exists) continue;
+    for (const entry of await fs.readdir(archive.target)) {
+      if (entry === name) {
+        // 历史 compat 无日期归档也须检查，但不扩大 SDK checkpoint 的恢复范围。
+        await candidate(path.join(archive.target, entry));
+      } else if (archiveNameMatchesChange(entry, name)) {
+        files.push(await candidate(path.join(archive.target, entry)));
+      }
+    }
+  }
+  return files;
+}
+
 function changeDirectory(projectRoot: string, directory: string): ClassicChangeDirectory {
   return {
     label: classicProjectRelative(projectRoot, directory),
@@ -93,7 +128,7 @@ async function inspectChangeDirectory(
   if (!inspection.exists) return { change, exists: false, stateExists: false };
   const state = await inspectClassicProjectTarget(
     projectRoot,
-    path.join(directory, '.comet.yaml'),
+    await resolveClassicStateFile(directory),
     {
       label: `${label} state`,
       expected: 'file',

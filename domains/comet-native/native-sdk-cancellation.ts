@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRoot } from '../workflow-contract/workspace-runtime.js';
 import path from 'node:path';
 
 import { createFileRuntimeStore, createRuntime, type WorkflowRun } from '../engine/runtime.js';
@@ -42,7 +43,7 @@ export async function inspectNativeSdkCancellation(options: {
   const visited = new Set<string>();
   const owner = await readSdkChangeOwner(options.projectRoot, 'native', options.run.runId);
   const store = createFileRuntimeStore<WorkflowRun>({
-    rootDir: path.join(options.projectRoot, '.comet/runtime/sdk-runs/native'),
+    rootDir: path.join(await resolveWorkspaceRuntimeRoot(options.projectRoot), 'sdk-runs/native'),
   });
   async function inspect(run: WorkflowRun): Promise<void> {
     if (visited.has(run.runId)) return;
@@ -162,8 +163,8 @@ export async function inspectNativeSdkCancellation(options: {
         const paths = await nativeProjectPaths(options.projectRoot, input.artifactRootRef);
         const file = path.join(paths.locksDir, 'root-move.lock');
         await inspectProtectedProjectPath(
-          options.projectRoot,
-          path.relative(options.projectRoot, file),
+          paths.workspaceRuntimeRoot,
+          path.relative(paths.workspaceRuntimeRoot, file),
           { label: 'Native cancellation root mutation lock', expected: 'file' },
         );
         const lock = await diagnoseNativeLock(file);

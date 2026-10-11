@@ -1,3 +1,9 @@
+import {
+  resolveWorkspaceRuntimeRoot,
+  resolveWorkspaceRuntimeRootSync,
+  isWorkspaceRuntimeMigrationFence,
+} from '../workflow-contract/workspace-runtime.js';
+import { inspectProtectedProjectPath } from '../workflow-contract/protected-project-path.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createRequire, isBuiltin } from 'node:module';
@@ -57,11 +63,70 @@ function safeId(id: string): string {
   return id;
 }
 
-function rawStore(projectRoot: string, id: string) {
-  return createFileRuntimeStore<ApplicationRunRecord>({
-    rootDir: path.join(projectRoot, '.comet/runtime/applications', safeId(id)),
+async function rawStore(
+  projectRoot: string,
+  id: string,
+  readOnly = false,
+): Promise<RuntimeStore<ApplicationRunRecord>> {
+  const root = resolveWorkspaceRuntimeRootSync(projectRoot);
+  const assertCurrentRoot = () => {
+    if (resolveWorkspaceRuntimeRootSync(projectRoot) !== root)
+      throw new RuntimeProtocolError(
+        'WORKFLOW_CHANGED',
+        '工作区身份已改变，请重新加载应用 Runtime',
+      );
+  };
+  const prepare = async () => {
+    assertCurrentRoot();
+    if (!readOnly) {
+      const resolved = await resolveWorkspaceRuntimeRoot(projectRoot);
+      if (resolved !== root)
+        throw new RuntimeProtocolError(
+          'WORKFLOW_CHANGED',
+          '工作区身份已改变，请重新加载应用 Runtime',
+        );
+      assertCurrentRoot();
+    }
+  };
+  const store = createFileRuntimeStore<ApplicationRunRecord>({
+    rootDir: path.join(root, 'applications', safeId(id)),
     mirroredRevisionPaths: ['run.revision'],
   });
+  return {
+    read: async (runId) => {
+      await prepare();
+      const current = await store.read(runId);
+      if (!readOnly) return current;
+      const legacy = await inspectProtectedProjectPath(projectRoot, '.comet/runtime', {
+        label: '应用旧 Runtime 只读查询',
+      });
+      if (!legacy.exists || (await isWorkspaceRuntimeMigrationFence(legacy.target))) return current;
+      if (!(await fs.lstat(legacy.target)).isDirectory())
+        throw new RuntimeProtocolError('INVALID_RUN', '应用旧 Runtime 目录类型无效');
+      const prior = await createFileRuntimeStore<ApplicationRunRecord>({
+        rootDir: path.join(legacy.target, 'applications', safeId(id)),
+        mirroredRevisionPaths: ['run.revision'],
+      }).read(runId);
+      if (current && prior)
+        throw new RuntimeProtocolError(
+          'INVALID_RUN',
+          '新旧应用 Runtime 同时存在，拒绝选择写入权威',
+        );
+      return current ?? prior;
+    },
+    compareAndSwap: async (runId, revision, next) => {
+      assertCurrentRoot();
+      if (readOnly) throw new RuntimeProtocolError('READ_ONLY_OPERATION', '应用诊断不能推进 Run');
+      await prepare();
+      return store.compareAndSwap(runId, revision, next);
+    },
+    restoreCheckpoint: async (runId, revision, checkpoint) => {
+      assertCurrentRoot();
+      if (readOnly) throw new RuntimeProtocolError('READ_ONLY_OPERATION', '应用诊断不能恢复 Run');
+      await prepare();
+      return store.restoreCheckpoint!(runId, revision, checkpoint);
+    },
+  };
 }
 
 /** 只读取保存的进度；不加载应用代码、不恢复记录，也不更新领域投影。 */
@@ -70,7 +135,7 @@ export async function readWorkflowApplicationRun(
   applicationId: string,
   runId: string,
 ): Promise<WorkflowRun | null> {
-  const record = await rawStore(projectRoot, applicationId).read(runId);
+  const record = await (await rawStore(projectRoot, applicationId, true)).read(runId);
   if (!record) return null;
   if (
     record.application.id !== applicationId ||
@@ -121,7 +186,7 @@ export async function resolveWorkflowApplicationFile(
   id: string,
   runId: string,
 ): Promise<string> {
-  const record = await rawStore(await fs.realpath(projectRoot), id).read(runId);
+  const record = await (await rawStore(await fs.realpath(projectRoot), id, true)).read(runId);
   if (record) return path.join(record.application.packageRoot, 'application.json');
   return (
     (await resolveInstalledWorkflowApplication({ projectRoot, scope: 'project' }, safeId(id))) ??
@@ -203,7 +268,7 @@ export async function loadWorkflowApplication(options: {
     hashRuntimeValue(identity) !== hashRuntimeValue(options.expectedIdentity)
   )
     throw new RuntimeProtocolError('WORKFLOW_CHANGED', '恢复需要原固定应用包、依赖和工作区');
-  const persistent = rawStore(projectRoot, manifest.id);
+  const persistent = await rawStore(projectRoot, manifest.id, options.readOnly);
   const assertIdentity = (record: ApplicationRunRecord) => {
     if (hashRuntimeValue(record.application) !== hashRuntimeValue(identity))
       throw new RuntimeProtocolError(

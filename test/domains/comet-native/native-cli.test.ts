@@ -16,8 +16,11 @@ import { projectRootFrom } from '../../../domains/comet-native/native-cli-shared
 import { acquireNativeLock, releaseNativeLock } from '../../../domains/comet-native/native-lock.js';
 import {
   nativeChangeRuntimeDir,
+  nativeLegacyChangeRuntimeDir,
+  nativePreferredChangeRuntimeDir,
   nativeProjectPaths,
 } from '../../../domains/comet-native/native-paths.js';
+import { isWorkspaceRuntimeMigrationFence } from '../../../domains/workflow-contract/workspace-runtime.js';
 import {
   nativeLocalExecutionFile,
   readNativePortableChange,
@@ -1474,8 +1477,10 @@ describe('Comet Native CLI dispatcher', () => {
         run_id: 'legacy-run',
       }),
     );
-    const runtimeDir = nativeChangeRuntimeDir(paths, 'legacy-change');
-    await fs.mkdir(path.join(runtimeDir, 'evidence'), { recursive: true });
+    const legacyRuntimeDir = nativeLegacyChangeRuntimeDir(paths, 'legacy-change');
+    const runtimeDir = nativePreferredChangeRuntimeDir(paths, 'legacy-change');
+    await fs.mkdir(path.join(legacyRuntimeDir, 'evidence'), { recursive: true });
+    await fs.writeFile(path.join(legacyRuntimeDir, 'evidence', 'history.json'), '{"legacy":true}');
     await fs.writeFile(path.join(changeDir, 'evidence.md'), 'legacy evidence');
 
     expect(
@@ -1516,7 +1521,11 @@ describe('Comet Native CLI dispatcher', () => {
       },
     });
     expect(JSON.stringify(migrated.data)).not.toMatch(/[a-f0-9]{64}/u);
-    expect(await fs.readdir(runtimeDir)).toEqual(['state.json']);
+    expect((await fs.readdir(runtimeDir)).sort()).toEqual(['evidence', 'state.json']);
+    expect(await fs.readFile(path.join(runtimeDir, 'evidence', 'history.json'), 'utf8')).toBe(
+      '{"legacy":true}',
+    );
+    expect(await isWorkspaceRuntimeMigrationFence(legacyRuntimeDir, runtimeDir)).toBe(true);
     await expect(fs.access(path.join(changeDir, 'evidence.md'))).rejects.toMatchObject({
       code: 'ENOENT',
     });

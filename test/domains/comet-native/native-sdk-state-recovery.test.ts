@@ -1,3 +1,7 @@
+import {
+  resolveWorkspaceRuntimeRoot,
+  resolveWorkspaceRuntimeRootSync,
+} from '../../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
@@ -36,10 +40,10 @@ const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
-async function fixture(custom = false) {
+async function fixture(custom = false, { initializeGit = true, completeShape = true } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-sdk-recovery-'));
   roots.push(root);
-  execFileSync('git', ['init', '-b', 'main'], { cwd: root, stdio: 'ignore' });
+  if (initializeGit) execFileSync('git', ['init', '-b', 'main'], { cwd: root, stdio: 'ignore' });
   await writeProjectConfig(root, defaultProjectConfig('docs', 'en'));
   const paths = await nativeProjectPaths(root, 'docs');
   await ensureNativeDirectories(paths);
@@ -76,7 +80,12 @@ async function fixture(custom = false) {
   const state = createNativePortableState({
     name,
     language: 'en',
-    workspace: { isolation: 'current', change_branch: 'main', target_branch: 'main', finish: null },
+    workspace: {
+      isolation: 'current',
+      change_branch: initializeGit ? 'main' : null,
+      target_branch: initializeGit ? 'main' : null,
+      finish: null,
+    },
     nextAction: 'prepare-shape-confirmation',
   });
   let run = await runtime.start({
@@ -94,7 +103,7 @@ async function fixture(custom = false) {
     runId: name,
   });
   const action = run.actions[0];
-  await runtime.claim({
+  run = await runtime.claim({
     runId: name,
     actionId: action.id,
     attempt: action.attempt,
@@ -103,30 +112,34 @@ async function fixture(custom = false) {
     claimToken: 'shape-token',
     context: { requestId: 'shape', projectRoot: root },
   });
-  run = await runtime.recordOutcome({
-    runId: name,
-    outcome: {
-      actionId: action.id,
-      attempt: action.attempt,
-      inputHash: action.inputHash,
-      claimToken: 'shape-token',
-      outcomeId: 'shape',
-      status: 'succeeded',
-      output: (await collectNativeSdkShapeProposal({ paths, state })) as never,
-    },
-    context: { requestId: 'shape', projectRoot: root },
-  });
+  if (completeShape)
+    run = await runtime.recordOutcome({
+      runId: name,
+      outcome: {
+        actionId: action.id,
+        attempt: action.attempt,
+        inputHash: action.inputHash,
+        claimToken: 'shape-token',
+        outcomeId: 'shape',
+        status: 'succeeded',
+        output: (await collectNativeSdkShapeProposal({ paths, state })) as never,
+      },
+      context: { requestId: 'shape', projectRoot: root },
+    });
   const stateFile = path.join(changeDir, 'comet-state.yaml');
-  const markerFile = path.join(root, '.comet/runtime/state-projections/native/demo.json');
+  const markerFile = path.join(
+    resolveWorkspaceRuntimeRootSync(root),
+    'state-projections/native/demo.json',
+  );
   const raw = createFileRuntimeStore<WorkflowRun>({
-    rootDir: path.join(root, '.comet/runtime/sdk-runs/native'),
+    rootDir: path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs/native'),
   });
   const checkpoint = async () =>
     readPortableRunCheckpoint(parse(await fs.readFile(stateFile, 'utf8')).run_checkpoint, name, {
       preserveSourceRevision: true,
     })!;
   const loseRun = () =>
-    fs.rm(path.join(root, '.comet/runtime/sdk-runs/native'), { recursive: true });
+    fs.rm(path.join(resolveWorkspaceRuntimeRootSync(root), 'sdk-runs/native'), { recursive: true });
   return {
     root,
     name,
@@ -143,6 +156,77 @@ async function fixture(custom = false) {
 }
 
 describe('Native trusted checkpoint recovery', () => {
+  it.each(['initialize-git', 'replace-git'])(
+    'rejects stale store reads and CAS after %s without modifying the captured home',
+    async (mutation) => {
+      const f = await fixture();
+      if (mutation === 'initialize-git') {
+        await fs.rename(path.join(f.root, '.git'), path.join(f.root, '.git-before-initialization'));
+      }
+      const previousRoot = await resolveWorkspaceRuntimeRoot(f.root);
+      await fs.writeFile(path.join(previousRoot, 'preserved.txt'), 'Keep the old authority.');
+      const store = createNativeSdkStateStore(f.root);
+      const readOnlyStore = createNativeSdkStateStore(f.root, { readOnly: true });
+      const snapshot = async (root: string): Promise<Record<string, string>> => {
+        const entries: Record<string, string> = {};
+        const visit = async (directory: string): Promise<void> => {
+          for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+            const target = path.join(directory, entry.name);
+            const ref = path.relative(root, target);
+            if (entry.isDirectory()) {
+              entries[ref] = 'directory';
+              await visit(target);
+            } else {
+              entries[ref] = (await fs.readFile(target)).toString('base64');
+            }
+          }
+        };
+        await visit(root);
+        return entries;
+      };
+      const previous = await snapshot(previousRoot);
+      if (mutation === 'replace-git') {
+        await fs.rename(path.join(f.root, '.git'), path.join(f.root, '.git-before-replacement'));
+      }
+      execFileSync('git', ['init', '-b', 'main'], { cwd: f.root, stdio: 'ignore' });
+      const currentRoot = resolveWorkspaceRuntimeRootSync(f.root);
+      expect(currentRoot).not.toBe(previousRoot);
+
+      await expect(store.read(f.name)).rejects.toThrow(/workspace identity changed.*recreate/u);
+      await expect(readOnlyStore.read(f.name)).rejects.toThrow(
+        /workspace identity changed.*recreate/u,
+      );
+      await expect(
+        store.compareAndSwap(f.name, f.run.revision, { ...f.run, revision: f.run.revision + 1 }),
+      ).rejects.toThrow(/workspace identity changed.*recreate/u);
+      expect(await snapshot(previousRoot)).toEqual(previous);
+      await expect(fs.stat(currentRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  it.each([true, false])(
+    'recovers a pre-Git checkpoint after initialization with completed Shape=%s without replay',
+    async (completeShape) => {
+      const f = await fixture(false, { initializeGit: false, completeShape });
+      const previousRoot = resolveWorkspaceRuntimeRootSync(f.root);
+      const previous = await f.raw.read(f.name);
+      const checkpoint = await f.checkpoint();
+      execFileSync('git', ['init', '-b', 'main'], { cwd: f.root, stdio: 'ignore' });
+      expect(resolveWorkspaceRuntimeRootSync(f.root)).not.toBe(previousRoot);
+      await expect(f.store.read(f.name)).rejects.toThrow(/workspace identity changed/u);
+
+      const restored = await createNativeSdkStateStore(f.root).read(f.name);
+      expect(restored).toEqual(checkpoint);
+      expect(restored!.actions[0]).toMatchObject({
+        id: previous!.actions[0].id,
+        inputHash: previous!.actions[0].inputHash,
+        status: completeShape ? 'succeeded' : 'unknown',
+      });
+      expect(restored!.waits).toEqual(previous!.waits);
+      expect(await f.raw.read(f.name)).toEqual(previous);
+    },
+  );
+
   it.each(['run', 'projection', 'runtime'])(
     'recovers missing %s at the saved Shape revision and keeps its decision pending',
     async (missing) => {
@@ -153,8 +237,8 @@ describe('Native trusted checkpoint recovery', () => {
       else
         await fs.rm(
           path.join(
-            f.root,
-            `.comet/runtime${missing === 'projection' ? '/state-projections' : ''}`,
+            resolveWorkspaceRuntimeRootSync(f.root),
+            missing === 'projection' ? 'state-projections' : '.',
           ),
           { recursive: true },
         );

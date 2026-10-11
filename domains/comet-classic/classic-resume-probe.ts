@@ -1,3 +1,5 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
+import { resolveWorkspaceRuntimeRoot } from '../workflow-contract/workspace-runtime.js';
 import { measureCometGitCommandAsync } from '../../platform/process/runtime-metrics.js';
 import path from 'node:path';
 
@@ -267,7 +269,7 @@ async function inspectManagedRun(
   }
   try {
     const store = createFileRuntimeStore<WorkflowRun>({
-      rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+      rootDir: path.join(await resolveWorkspaceRuntimeRoot(projectRoot), 'sdk-runs', 'classic'),
     });
     const run = await store.read(owner.runId);
     if (!run) {
@@ -343,7 +345,7 @@ async function discoverActiveChanges(projectRoot: string): Promise<ActiveProbeCh
     const managed = await inspectManagedRun(
       projectRoot,
       entry,
-      path.join(changeDir, '.comet.yaml'),
+      await resolveClassicStateFile(changeDir),
     );
     const projection = await readClassicState(changeDir, { migrate: false });
     if (managed.state) projection.classic = managed.state;
@@ -409,7 +411,7 @@ async function discoverPendingArchivedChanges(projectRoot: string): Promise<Acti
     const managed = await inspectManagedRun(
       projectRoot,
       name,
-      path.join(inspection.target, '.comet.yaml'),
+      await resolveClassicStateFile(inspection.target),
     );
     if (managed.state) projection.classic = managed.state;
     const classic = projection.classic;

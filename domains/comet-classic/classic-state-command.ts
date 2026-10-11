@@ -1,3 +1,10 @@
+import { resolveClassicStateFile, LEGACY_CLASSIC_STATE_FILE } from './classic-state-file.js';
+import { randomUUID } from 'node:crypto';
+import {
+  protectClassicLegacyStateWriter,
+  resolveClassicRunDirectory,
+  resolveClassicLocalTarget,
+} from './classic-runtime-paths.js';
 import { inspectClassicSdkRevisionReadiness } from './classic-sdk-revision-readiness.js';
 import { inspectClassicSdkActionRecovery } from './classic-sdk-check-recovery.js';
 import { reviseClassicSdkWork } from './classic-sdk-revision.js';
@@ -69,6 +76,7 @@ import { collectClassicEvidence } from './classic-evidence.js';
 import {
   collectClassicSpecFiles,
   ensureClassicActiveChangeDirectory,
+  inspectClassicStateFileCandidates,
   openSpecChangeNameError,
   resolveClassicChangeDirectory,
 } from './classic-paths.js';
@@ -96,7 +104,7 @@ import {
   type ClassicTransitionEvent,
 } from './classic-transitions.js';
 import { readRunState } from '../../domains/engine/state.js';
-import { appendTrajectory, readTrajectory } from '../../domains/engine/run-store.js';
+import { appendTrajectory, readTrajectory } from './classic-run-store.js';
 import {
   recordCommandCheck,
   recoverCommandChecks,
@@ -290,13 +298,14 @@ async function readDocument(file: string): Promise<Document> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       fail(
-        `ERROR: .comet.yaml not found at ${path.relative(projectRoot, file).replaceAll('\\', '/')}`,
+        `ERROR: ${path.basename(file)} not found at ${path.relative(projectRoot, file).replaceAll('\\', '/')}`,
       );
     }
     throw error;
   }
   const document = parseDocument(source, { uniqueKeys: false });
-  if (document.errors.length > 0) fail(`ERROR: Invalid .comet.yaml: ${document.errors[0].message}`);
+  if (document.errors.length > 0)
+    fail(`ERROR: Invalid ${path.basename(file)}: ${document.errors[0].message}`);
   return document;
 }
 
@@ -495,7 +504,7 @@ async function stateFile(
   );
   return {
     ...change,
-    file: path.join(change.directory, '.comet.yaml'),
+    file: await resolveClassicStateFile(change.directory),
   };
 }
 
@@ -579,12 +588,46 @@ async function validateSetValue(field: string, value: string): Promise<void> {
   }
 }
 
+async function validateSetFields(
+  updates: Array<[string, string]>,
+  options: { internal?: boolean; machineOwned?: boolean },
+): Promise<Set<string>> {
+  const seen = new Set<string>();
+  for (const [field, value] of updates) {
+    if (seen.has(field)) fail(`ERROR: Duplicate field: '${field}'`);
+    seen.add(field);
+    if (MACHINE_OWNED_FIELDS.has(field) && !options.machineOwned) {
+      fail(`ERROR: '${field}' is a machine-owned field and cannot be set directly`);
+    }
+    if (!SETTABLE_FIELDS.has(field) && !MACHINE_OWNED_FIELDS.has(field)) {
+      throw new CommandFailure(`ERROR: Unknown field: '${field}'`, 1, {
+        code: 'CLASSIC_FIELD_UNKNOWN',
+        field,
+        actual: field,
+        expected: [...SETTABLE_FIELDS],
+        message: `Unknown Classic state field: ${field}.`,
+      });
+    }
+    if (field === 'phase' && !options.internal && process.env.COMET_FORCE_PHASE !== '1') {
+      fail(
+        "ERROR: Setting 'phase' directly is not allowed; it bypasses state machine evidence checks.\n" +
+          '  Use: comet state transition <change-name> <event>\n' +
+          '  Repair-only escape hatch: COMET_FORCE_PHASE=1 comet state set <change-name> phase <value>',
+      );
+    }
+    await validateSetValue(field, value);
+    parsedValue(field, value);
+  }
+  return seen;
+}
+
 async function setFields(
   output: CommandOutput,
   name: string,
   updates: Array<[string, string]>,
   options: { internal?: boolean; machineOwned?: boolean } = {},
 ): Promise<void> {
+  await validateSetFields(updates, options);
   const projectRoot = classicCommandProjectRoot();
   const owner = await resolveClassicChangeRuntimeOwner(projectRoot, name);
   if (owner?.format === 'sdk') {
@@ -611,31 +654,7 @@ async function setFieldsLocked(
   updates: Array<[string, string]>,
   options: { internal?: boolean; machineOwned?: boolean },
 ): Promise<void> {
-  const seen = new Set<string>();
-  for (const [field, value] of updates) {
-    if (seen.has(field)) fail(`ERROR: Duplicate field: '${field}'`);
-    seen.add(field);
-    if (MACHINE_OWNED_FIELDS.has(field) && !options.machineOwned) {
-      fail(`ERROR: '${field}' is a machine-owned field and cannot be set directly`);
-    }
-    if (!SETTABLE_FIELDS.has(field) && !MACHINE_OWNED_FIELDS.has(field)) {
-      throw new CommandFailure(`ERROR: Unknown field: '${field}'`, 1, {
-        code: 'CLASSIC_FIELD_UNKNOWN',
-        field,
-        actual: field,
-        expected: [...SETTABLE_FIELDS],
-        message: `Unknown Classic state field: ${field}.`,
-      });
-    }
-    if (field === 'phase' && !options.internal && process.env.COMET_FORCE_PHASE !== '1') {
-      fail(
-        "ERROR: Setting 'phase' directly is not allowed; it bypasses state machine evidence checks.\n" +
-          '  Use: comet state transition <change-name> <event>\n' +
-          '  Repair-only escape hatch: COMET_FORCE_PHASE=1 comet state set <change-name> phase <value>',
-      );
-    }
-    await validateSetValue(field, value);
-  }
+  const seen = await validateSetFields(updates, options);
   const { file, directory } = await stateFile(name);
   const document = await readDocument(file);
   const previousRecord = (document.toJS() ?? {}) as Record<string, unknown>;
@@ -679,7 +698,7 @@ async function setFieldsLocked(
       }
     }
   }
-  const run = await readRunState(directory);
+  const run = await readRunState(await resolveClassicRunDirectory(directory));
   const projection = parseClassicStateDocument(document.toJS() as Record<string, unknown>, run);
   if (projection.run) {
     if (!projection.classic) fail('ERROR: migrated Run is missing its Classic projection');
@@ -755,12 +774,17 @@ async function init(
     }
     const change = await ensureClassicActiveChangeDirectory(name, projectRoot);
     const { label, directory } = change;
-    const file = path.join(directory, '.comet.yaml');
-    if (await exists(file)) fail(`ERROR: .comet.yaml already exists at ${label}/.comet.yaml`);
+    const file = await resolveClassicStateFile(directory, {
+      ...(runtimeFormat === 'compat' ? { defaultFileName: LEGACY_CLASSIC_STATE_FILE } : {}),
+    });
+    if (await exists(file))
+      fail(`ERROR: Classic state already exists at ${label}/${path.basename(file)}`);
 
+    await protectClassicLegacyStateWriter(directory, projectRoot);
     const preset = workflow !== 'full';
     const reviewMode = preset ? 'off' : await reviewModeDefault();
     const document = new Document({
+      change_id: randomUUID(),
       workflow,
       language: await projectLanguageDefault(),
       phase: 'open',
@@ -909,7 +933,7 @@ async function writeSparseTransitionEffects(
   directory: string,
   effects: Array<{ field: keyof ClassicState; to: unknown }>,
 ): Promise<void> {
-  const file = path.join(directory, '.comet.yaml');
+  const file = await resolveClassicStateFile(directory);
   const document = await readDocument(file);
   for (const effect of effects) {
     const field = wireField(effect.field);
@@ -929,7 +953,7 @@ async function applyTransitionEvent(
   let sparse = false;
   if (!classic) {
     if (projection.run) fail('ERROR: Classic state projection is missing');
-    const document = await readDocument(path.join(directory, '.comet.yaml'));
+    const document = await readDocument(await resolveClassicStateFile(directory));
     classic = sparseClassicState(document.toJS() as Record<string, unknown>);
     sparse = true;
   }
@@ -1125,7 +1149,8 @@ async function next(output: CommandOutput, name: string, details = false): Promi
     return;
   }
   const { file, label, directory } = await stateFile(name);
-  if (!(await exists(file))) fail(`ERROR: .comet.yaml not found at ${label}/.comet.yaml`);
+  if (!(await exists(file)))
+    fail(`ERROR: ${path.basename(file)} not found at ${label}/${path.basename(file)}`);
   const record = (await readDocument(file)).toJS() as Record<string, unknown>;
   const phase = scalar(record.phase);
   const workflow = scalar(record.workflow);
@@ -1540,7 +1565,8 @@ async function check(
   }
   const { file, directory, label } = await stateFile(name);
   output.stdout.push(`=== Entry Check: comet-${phase} ===`);
-  if (!(await exists(file))) fail(`ERROR: .comet.yaml not found at ${label}/.comet.yaml`);
+  if (!(await exists(file)))
+    fail(`ERROR: ${path.basename(file)} not found at ${label}/${path.basename(file)}`);
   const record = (await readDocument(file)).toJS() as Record<string, unknown>;
   let blocked = false;
   let passed = 0;
@@ -1569,7 +1595,7 @@ async function check(
     if (actual === expected) pass(`${field}=${actual} (expected: ${expected})`);
     else reject(`${field}=${actual} (expected: ${expected})`, { field, actual, expected });
   };
-  pass('.comet.yaml exists');
+  pass(`${path.basename(file)} exists`);
   await expectField('phase', phase);
   if (phase === 'design') {
     await expectField('workflow', 'full');
@@ -1905,7 +1931,8 @@ async function recover(
 ): Promise<void> {
   validateChangeName(name);
   const { file, directory, label } = await stateFile(name);
-  if (!(await exists(file))) fail(`ERROR: .comet.yaml not found at ${label}/.comet.yaml`);
+  if (!(await exists(file)))
+    fail(`ERROR: ${path.basename(file)} not found at ${label}/${path.basename(file)}`);
   const projection = await readClassicState(directory, { migrate: false });
   const classic =
     projection.classic ??
@@ -1921,7 +1948,13 @@ async function recover(
         persistInvalidation: !classic.archived,
       })
     : { build: 'rerun-required', verify: 'rerun-required' };
-  const checkpoint = path.join(directory, '.comet', 'subagent-progress.md');
+  const checkpointRef = path.join(directory, '.comet', 'subagent-progress.md');
+  const checkpoint =
+    (
+      await resolveClassicLocalTarget(classicCommandProjectRoot(), checkpointRef, {
+        migrate: false,
+      })
+    )?.target ?? checkpointRef;
   const context = await classicRecoveryContext(
     classicCommandProjectRoot(),
     directory,
@@ -2175,6 +2208,7 @@ async function assertStateChangeNotSdkOwned(
   const name = args[0];
   if (!name) return;
   validateChangeName(name);
+  await inspectClassicStateFileCandidates(classicCommandProjectRoot(), name);
   if (
     subcommand === 'next' ||
     subcommand === 'restore' ||

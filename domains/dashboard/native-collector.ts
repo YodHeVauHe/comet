@@ -210,7 +210,7 @@ async function readMatchingLocalExecution(
   let file: string;
   try {
     file = path.join(nativePreferredChangeRuntimeDir(paths, state.name), 'state.json');
-    await resolveContainedNativePath(paths.projectRoot, file);
+    await resolveContainedNativePath(paths.runtimeDir, file);
   } catch {
     return { state: null, reason: 'invalid' };
   }

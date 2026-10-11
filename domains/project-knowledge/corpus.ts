@@ -1,3 +1,4 @@
+import { resolveClassicStateFile } from '../comet-classic/classic-state-file.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
@@ -246,8 +247,8 @@ async function discoverSuperpowers(
   const references = new Set<string>();
   for (const change of changes) {
     if (budget && budgetExpired(budget)) break;
-    const state = path.join(change, '.comet.yaml');
     try {
+      const state = await resolveClassicStateFile(change);
       const source = relativeSource(projectRoot, state);
       const bytes = await readProtectedProjectFile(projectRoot, source, MAX_REFERENCE_BYTES, {
         label: `${relativeSource(projectRoot, state)} state`,
@@ -265,7 +266,7 @@ async function discoverSuperpowers(
         report(
           reporter,
           'superpowers-state',
-          `未进入检索：无法读取 Classic 归档状态 ${relativeSource(projectRoot, state)}，其引用文档当前不会参与召回。`,
+          `未进入检索：无法读取 Classic 归档状态 ${relativeSource(projectRoot, change)}，其引用文档当前不会参与召回。`,
         );
       }
     }
@@ -309,8 +310,8 @@ async function walkDirectories(
       if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
       const target = path.join(directory, entry.name);
       if (!isInside(projectRoot, target)) continue;
-      const statePath = path.join(target, '.comet.yaml');
       try {
+        const statePath = await resolveClassicStateFile(target);
         const state = await fs.lstat(statePath);
         if (state.isFile() && !state.isSymbolicLink()) result.push(target);
       } catch (error) {
@@ -319,7 +320,7 @@ async function walkDirectories(
           report(
             reporter,
             'corpus-read',
-            `未进入检索：无法读取 Classic 归档状态 ${relativeSource(projectRoot, statePath)}。`,
+            `未进入检索：无法读取 Classic 归档状态 ${relativeSource(projectRoot, target)}。`,
           );
         }
       }

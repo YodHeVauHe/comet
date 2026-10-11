@@ -1,3 +1,11 @@
+import { resolveClassicStateFile, CLASSIC_STATE_FILES } from './classic-state-file.js';
+import { CLASSIC_LOCAL_RECORDS, selectClassicLocalReadTarget } from './classic-runtime-paths.js';
+import {
+  migrateWorkspaceRuntimePath,
+  isWorkspaceRuntimeMigrationFence,
+  resolveWorkspaceRuntimeRoot,
+  resolveWorkspaceRuntimeRootSync,
+} from '../workflow-contract/workspace-runtime.js';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -134,7 +142,7 @@ async function readRecord(root: string, changeDir: string, filename: string): Pr
 
 function deliveryReauthorizationFile(root: string, changeIdentity: string): string {
   const key = createHash('sha256').update(changeIdentity).digest('hex');
-  return path.join(root, '.comet', 'runtime', 'classic-delivery', `${key}.json`);
+  return path.join(resolveWorkspaceRuntimeRootSync(root), 'classic-delivery', `${key}.json`);
 }
 
 interface ClassicDeliveryReauthorization {
@@ -387,7 +395,7 @@ function authorizedIdentity(
 
 async function currentState(root: string, changeDir: string) {
   return stateObject(
-    await readClassicProjectFile(root, path.join(changeDir, '.comet.yaml'), {
+    await readClassicProjectFile(root, await resolveClassicStateFile(changeDir), {
       label: 'Classic delivery state',
     }),
   );
@@ -489,9 +497,11 @@ function archivePathspecs(root: string, changeDir: string): string[] {
   const relative = path.relative(root, changeDir).replaceAll('\\', '/');
   return [
     `:(literal)${relative}`,
-    ...['.comet-state.lock', '.comet-state-transaction.json'].map(
-      (file) => `:(exclude,literal)${relative}/${file}`,
-    ),
+    ...[
+      '.comet-state.lock',
+      '.comet-state-transaction.json',
+      ...[...CLASSIC_LOCAL_RECORDS].map((name) => `.comet/${name}`),
+    ].map((file) => `:(exclude,literal)${relative}/${file}`),
   ];
 }
 
@@ -514,8 +524,11 @@ function archiveCommitMatches(
 ): boolean {
   const relative = path.relative(root, changeDir).replaceAll('\\', '/');
   const archivePaths = archivePathspecs(root, changeDir);
-  const source = verifyingGit(root, ['show', `${commit}:${relative}/.comet.yaml`]);
-  if (!source) return false;
+  const sources = CLASSIC_STATE_FILES.map((name) =>
+    verifyingGit(root, ['show', `${commit}:${relative}/${name}`]),
+  ).filter((source): source is string => source !== null);
+  if (sources.length !== 1) return false;
+  const source = sources[0];
   try {
     const committed = stateObject(source);
     return (
@@ -565,6 +578,8 @@ async function archiveFileManifest(
     );
     for (const entry of entries) {
       if (['.comet-state.lock', '.comet-state-transaction.json'].includes(entry.name)) continue;
+      if (directory === path.join(changeDir, '.comet') && CLASSIC_LOCAL_RECORDS.has(entry.name))
+        continue;
       const target = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         await visit(target);
@@ -589,9 +604,14 @@ function archiveManifestsMatch(
   left: Record<string, string>,
   right: Record<string, string>,
 ): boolean {
-  const names = Object.keys(left);
+  const portable = (file: string) => {
+    const match = /\/\.comet\/([^/]+)/u.exec(file);
+    return !match || !CLASSIC_LOCAL_RECORDS.has(match[1]);
+  };
+  const names = Object.keys(left).filter(portable);
   return (
-    names.length === Object.keys(right).length && names.every((name) => left[name] === right[name])
+    names.length === Object.keys(right).filter(portable).length &&
+    names.every((name) => left[name] === right[name])
   );
 }
 
@@ -672,20 +692,75 @@ export async function recordClassicDocumentArchive(root: string, changeDir: stri
   });
 }
 
-function receiptLocations(root: string, changeIdentity: string) {
+async function receiptLocations(
+  root: string,
+  changeIdentity: string,
+  options: { migrate?: boolean } = {},
+) {
   const filename = `${createHash('sha256').update(changeIdentity).digest('hex')}.json`;
+  const runtime = options.migrate
+    ? await resolveWorkspaceRuntimeRoot(root)
+    : resolveWorkspaceRuntimeRootSync(root);
+  const file = path.join(runtime, 'classic-delivery-receipts', filename);
+  if (!options.migrate) {
+    const locations = new Map<string, { root: string; file: string }>();
+    const local = await selectClassicLocalReadTarget(
+      root,
+      path.join(root, '.comet', 'classic-deliveries', filename),
+      file,
+    );
+    locations.set(local.target, { root, file: local.target });
+    const common = verifyingGit(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    if (common) {
+      const sourceRoot = await fs.realpath(common);
+      const source = path.join(sourceRoot, 'comet', 'classic-deliveries', filename);
+      const selected = await selectClassicLocalReadTarget(root, source, file, '', sourceRoot);
+      locations.set(selected.target, {
+        root: selected.target === source ? sourceRoot : root,
+        file: selected.target,
+      });
+    }
+    return [...locations.values()];
+  }
+  await migrateWorkspaceRuntimePath(
+    path.join(root, '.comet', 'classic-deliveries', filename),
+    file,
+    { projectRoot: root },
+  );
   const common = verifyingGit(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  return [
-    { root, file: path.join(root, '.comet', 'classic-deliveries', filename) },
-    ...(common
-      ? [{ root: common, file: path.join(common, 'comet', 'classic-deliveries', filename) }]
-      : []),
-  ];
+  const legacy = common ? path.join(common, 'comet', 'classic-deliveries', filename) : null;
+  if (legacy) {
+    const sourceRoot = await fs.realpath(common!);
+    const source = path.join(sourceRoot, 'comet', 'classic-deliveries', filename);
+    const exists = await classicProjectTargetExists(sourceRoot, source, {
+      label: 'Legacy Classic delivery receipt',
+      expected: 'any',
+    });
+    if (exists && !(await isWorkspaceRuntimeMigrationFence(source))) {
+      const receipt = JSON.parse(
+        await readClassicProjectFile(sourceRoot, source, {
+          label: 'Legacy Classic delivery receipt',
+        }),
+      );
+      if (
+        receipt?.schemaVersion !== 1 ||
+        receipt.changeIdentity !== changeIdentity ||
+        typeof receipt.authorizationId !== 'string'
+      )
+        throw new Error('Legacy Classic delivery receipt does not belong to this change');
+    }
+    await migrateWorkspaceRuntimePath(source, file, {
+      projectRoot: root,
+      sourceRoot,
+      ignoreForeignWorkspaceFence: true,
+    });
+  }
+  return [{ root, file }];
 }
 
 async function readReceipt(root: string, changeIdentity: string): Promise<DeliveryReceipt | null> {
   let receipt: DeliveryReceipt | null = null;
-  for (const location of receiptLocations(root, changeIdentity)) {
+  for (const location of await receiptLocations(root, changeIdentity)) {
     if (
       !(await classicProjectTargetExists(location.root, location.file, {
         label: 'Classic delivery receipt',
@@ -791,47 +866,15 @@ export async function invalidateClassicDelivery(root: string, changeDir: string)
 }
 
 async function writeReceipt(root: string, receipt: DeliveryReceipt): Promise<void> {
-  const locations = receiptLocations(root, receipt.changeIdentity);
-  const candidate = locations[0];
-  const relative = path.relative(root, candidate.file).replaceAll('\\', '/');
-  const ignored =
-    verifyingGit(root, ['check-ignore', '--quiet', '--', relative]) !== null &&
-    verifyingGit(root, ['ls-files', '--', `:(literal)${relative}`]) === '';
-  const location = ignored ? candidate : locations[1];
-  if (!location && verifyingGit(root, ['rev-parse', '--show-toplevel']) === null) {
-    await ensureClassicProjectDirectory(
-      root,
-      path.dirname(candidate.file),
-      'Classic delivery receipt directory',
-    );
-    await writeClassicProjectText(root, candidate.file, JSON.stringify(receipt, null, 2) + '\n', {
-      label: 'Classic delivery receipt',
-    });
-    return;
-  }
-  if (!location)
-    throw new Error('Classic delivery receipt requires ignored runtime storage or Git metadata');
-  if (
-    !ignored &&
-    (await classicProjectTargetExists(root, candidate.file, {
-      label: 'Classic delivery receipt',
-      expected: 'file',
-    }))
-  )
-    throw new Error(
-      'Classic delivery receipt became trackable; restore its runtime ignore rule before updating',
-    );
+  const [location] = await receiptLocations(root, receipt.changeIdentity, { migrate: true });
   await ensureClassicProjectDirectory(
-    location.root,
+    root,
     path.dirname(location.file),
     'Classic delivery receipt directory',
   );
-  await writeClassicProjectText(
-    location.root,
-    location.file,
-    JSON.stringify(receipt, null, 2) + '\n',
-    { label: 'Classic delivery receipt' },
-  );
+  await writeClassicProjectText(root, location.file, JSON.stringify(receipt, null, 2) + '\n', {
+    label: 'Classic delivery receipt',
+  });
 }
 
 function containsCommit(root: string, commit: string, head: string): boolean {
@@ -968,7 +1011,7 @@ export async function readClassicDelivery(
       '--format=%H',
       'HEAD',
       '--',
-      `:(literal)${relative}/.comet.yaml`,
+      ...CLASSIC_STATE_FILES.map((name) => `:(literal)${relative}/${name}`),
     ]);
     observedCommit =
       history
@@ -1317,7 +1360,7 @@ export async function reauthorizeClassicDelivery(
     targetBranch: next.targetBranch!,
     ...(authorizedRemoteUrl ? { authorizedRemoteUrl } : {}),
   };
-  const directory = path.join(root, '.comet', 'runtime', 'classic-delivery');
+  const directory = path.join(resolveWorkspaceRuntimeRootSync(root), 'classic-delivery');
   await ensureClassicProjectDirectory(
     root,
     directory,

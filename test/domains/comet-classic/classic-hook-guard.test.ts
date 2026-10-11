@@ -187,7 +187,7 @@ describe('Classic hook guard command', () => {
     await expect(
       inspectClassicHookGuard(dir, 'sdk-hook', { intent: 'write', targets: ['src/app.ts'] }),
     ).resolves.toMatchObject({ allowed: true, change: 'sdk-hook', phase: 'build' });
-    await expect(fs.access(path.join(changeDir, '.comet.yaml'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(changeDir, 'comet-state.yaml'))).resolves.toBeUndefined();
   });
 
   it.each(['Write', 'Edit'])(

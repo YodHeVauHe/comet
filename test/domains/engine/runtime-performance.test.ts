@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -52,7 +53,7 @@ describe('Runtime work budgets', () => {
     expect((await other.inspect(started.runId)).status).toBe('cancelled');
   });
 
-  it('scans a legitimate long history once without sorting or rereading old snapshots', async () => {
+  it('reads one bounded checkpoint without sorting or rereading old snapshots', async () => {
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), 'comet-history-budget-')),
     );
@@ -69,7 +70,14 @@ describe('Runtime work budgets', () => {
           input: { index },
         });
       }
-      const runDir = path.join(root, (await fs.readdir(root))[0]);
+      const runDir = path.join(
+        root,
+        '.runtime-store-v2',
+        createHash('sha256').update(JSON.stringify(run.runId)).digest('hex'),
+      );
+      expect((await fs.readdir(runDir)).filter((name) => name.endsWith('.json'))).toEqual([
+        'checkpoint.json',
+      ]);
       await fs.writeFile(path.join(runDir, '.abandoned.tmp'), 'partial');
       const originalReaddir = fs.readdir.bind(fs);
       const readdir = vi.spyOn(fs, 'readdir').mockImplementationOnce(async (...args) => {
@@ -84,7 +92,7 @@ describe('Runtime work budgets', () => {
         expect(compare).not.toHaveBeenCalled();
         const records = open.mock.calls.filter(([file]) => String(file).endsWith('.json'));
         expect(records).toHaveLength(1);
-        expect(String(records[0][0])).toBe(path.join(runDir, '0000000000000065.json'));
+        expect(String(records[0][0])).toBe(path.join(runDir, 'checkpoint.json'));
       } finally {
         readdir.mockRestore();
         open.mockRestore();
@@ -129,11 +137,11 @@ describe('Runtime work budgets', () => {
       invalid.actions = run.actions;
       invalid.commands![0].actionId = 'missing-action';
       expect(() => parseWorkflowRun(invalid)).toThrow(/INVALID_RUN/u);
-      await fs.unlink(path.join(runDir, '0000000000000032.json'));
-      await expect(store.read(run.runId)).rejects.toThrow(/STORE_MISSING_REVISION.*32/u);
+      await fs.unlink(path.join(runDir, 'checkpoint.json'));
+      await expect(store.read(run.runId)).rejects.toThrow(/STORE_CORRUPT_RECORD.*checkpoint/u);
       await expect(
         store.compareAndSwap(run.runId, run.revision, { ...run, revision: run.revision + 1 }),
-      ).rejects.toThrow(/STORE_MISSING_REVISION.*32/u);
+      ).rejects.toThrow(/STORE_CORRUPT_RECORD.*checkpoint/u);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

@@ -164,6 +164,8 @@
       "domains/workflow-contract"
     ],
     "allowedDomainDependencies": [
+      { "from": "workflow-creation", "to": "workflow-contract" },
+      { "from": "dashboard", "to": "comet-classic" },
       {
         "from": "bundle",
         "to": "skill"
@@ -338,6 +340,10 @@
       },
       {
         "from": "project-knowledge",
+        "to": "comet-classic"
+      },
+      {
+        "from": "project-knowledge",
         "to": "agent-learning"
       },
       {
@@ -431,6 +437,7 @@
       "domains/comet-classic/classic-protected-path.ts",
       "domains/comet-classic/classic-resume-probe.ts",
       "domains/comet-classic/classic-store.ts",
+      "domains/comet-classic/classic-state-file.ts",
       "domains/comet-classic/classic-sdk-status.ts",
       "domains/comet-entry/types.ts",
       "domains/comet-memory/index.ts",
@@ -486,6 +493,7 @@
       "domains/skill/snapshot.ts",
       "domains/skill/types.ts",
       "domains/skill/validate.ts",
+      "domains/workflow-contract/workspace-runtime.ts",
       "domains/workflow-contract/change-runtime-owner.ts",
       "domains/workflow-contract/contained-atomic-write.ts",
       "domains/workflow-contract/current-selection.ts",

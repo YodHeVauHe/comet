@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../domains/workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -171,7 +172,7 @@ describe('complete disk application public entry', () => {
       });
       expect(result.response.error.message).toContain('内置应用');
       await expect(
-        fs.stat(path.join(root, '.comet/runtime/applications', id)),
+        fs.stat(path.join(resolveWorkspaceRuntimeRootSync(root), 'applications', id)),
       ).rejects.toMatchObject({ code: 'ENOENT' });
     },
   );

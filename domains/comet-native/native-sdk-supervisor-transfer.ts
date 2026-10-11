@@ -1,3 +1,4 @@
+import { isWorkspaceRuntimeMigrationFence } from '../workflow-contract/workspace-runtime.js';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -29,7 +30,11 @@ import {
   atomicWriteContainedBytes,
   atomicWriteContainedText,
 } from '../workflow-contract/contained-atomic-write.js';
-import { ensureProtectedProjectDirectory } from '../workflow-contract/protected-project-path.js';
+import {
+  ensureProtectedProjectDirectory,
+  inspectProtectedProjectPath,
+  hashProtectedProjectFile,
+} from '../workflow-contract/protected-project-path.js';
 import { readProjectConfig } from './native-config.js';
 import { nativeProjectPaths } from './native-paths.js';
 import { parseNativePortableState } from './native-portable-state.js';
@@ -252,11 +257,23 @@ function workspacesFromRun(
   };
 }
 
-async function copyTree(source: string, target: string, prefix = ''): Promise<TransferFile[]> {
+async function copyTree(
+  source: string,
+  target: string,
+  prefix = '',
+  changeDocuments = false,
+): Promise<TransferFile[]> {
   const files: TransferFile[] = [];
   for (const entry of await fs.readdir(source, { withFileTypes: true })) {
     const ref = safeRelative(prefix ? `${prefix}/${entry.name}` : entry.name);
     const from = path.join(source, entry.name);
+    if (
+      changeDocuments &&
+      !prefix &&
+      entry.name === 'runtime' &&
+      (await isWorkspaceRuntimeMigrationFence(from))
+    )
+      continue;
     const to = path.join(target, entry.name);
     if (entry.isSymbolicLink())
       throw new Error(`Native Supervisor transfer cannot copy a symlink: ${ref}`);
@@ -411,20 +428,17 @@ export async function exportNativeSupervisorTransfer(options: {
     const changeFiles = await copyTree(
       path.join(paths.changesDir, options.name),
       path.join(temporary, 'change'),
+      '',
+      true,
     );
     const runtimeFiles: TransferFile[] = [];
-    const runtimeSource = path.join(
-      projectRoot,
-      '.comet/runtime/native/sdk-checks',
-      hashRuntimeValue(run.runId),
+    const runtimeSource = await inspectProtectedProjectPath(
+      paths.workspaceRuntimeRoot,
+      `native/sdk-checks/${hashRuntimeValue(run.runId)}`,
+      { label: 'Native transfer check artifacts', expected: 'directory' },
     );
-    if (
-      await fs.stat(runtimeSource).catch((error) => {
-        if (error.code === 'ENOENT') return null;
-        throw error;
-      })
-    )
-      runtimeFiles.push(...(await copyTree(runtimeSource, path.join(temporary, 'runtime'))));
+    if (runtimeSource.exists)
+      runtimeFiles.push(...(await copyTree(runtimeSource.target, path.join(temporary, 'runtime'))));
     for (const [index, workspace] of workspaces.entries()) {
       const workspaceDir = path.join(temporary, 'workspaces', String(index));
       await fs.mkdir(path.join(workspaceDir, 'tracked'), { recursive: true });
@@ -643,22 +657,25 @@ export async function importNativeSupervisorTransfer(options: {
     }
   }
   await createRuntime({ ...implementation, store: modelStore }).inspect(saved.runId);
+  const paths = await nativeProjectPaths(projectRoot, manifest.artifactRootRef);
   if (manifest.runtimeFiles !== undefined) {
     if (!Array.isArray(manifest.runtimeFiles)) throw new Error('Native 转移检查工件无效');
     if (manifest.runtimeFiles.length)
       await verifyTree(path.join(inputDir, 'runtime'), manifest.runtimeFiles);
     for (const file of manifest.runtimeFiles) {
-      const destination = path.join(
-        projectRoot,
-        '.comet/runtime/native/sdk-checks',
-        hashRuntimeValue(saved.runId),
-        safeRelative(file.path),
-      );
-      const existing = await fs.readFile(destination).catch((error) => {
-        if (error.code === 'ENOENT') return null;
-        throw error;
+      const ref = `native/sdk-checks/${hashRuntimeValue(saved.runId)}/${safeRelative(file.path)}`;
+      const existing = await inspectProtectedProjectPath(paths.workspaceRuntimeRoot, ref, {
+        label: 'Native transfer destination check artifact',
+        expected: 'file',
       });
-      if (existing && sha256(existing) !== file.sha256)
+      if (
+        existing.exists &&
+        (
+          await hashProtectedProjectFile(paths.workspaceRuntimeRoot, ref, {
+            label: 'Native transfer destination check artifact',
+          })
+        ).digest !== file.sha256
+      )
         throw new Error('Native 转移不能覆盖不同的检查工件');
     }
   }
@@ -748,7 +765,6 @@ export async function importNativeSupervisorTransfer(options: {
     }
   }
   const rebound = rebindRun(saved, mappings);
-  const paths = await nativeProjectPaths(projectRoot, manifest.artifactRootRef);
   const changeDir = path.join(paths.changesDir, manifest.name);
   for (const file of manifest.changeFiles) {
     safeRelative(file.path);
@@ -899,15 +915,15 @@ export async function importNativeSupervisorTransfer(options: {
   }
   for (const file of manifest.runtimeFiles ?? []) {
     const destination = path.join(
-      projectRoot,
-      '.comet/runtime/native/sdk-checks',
+      paths.workspaceRuntimeRoot,
+      'native/sdk-checks',
       hashRuntimeValue(saved.runId),
       safeRelative(file.path),
     );
     await atomicWriteContainedBytes(
       destination,
       await fs.readFile(path.join(inputDir, 'runtime', file.path)),
-      { containedRoot: projectRoot },
+      { containedRoot: paths.workspaceRuntimeRoot },
     );
   }
   if (application) {
@@ -923,18 +939,18 @@ export async function importNativeSupervisorTransfer(options: {
       throw new Error('Native 定制应用转移未恢复原 Run');
   } else {
     const store = createFileRuntimeStore<WorkflowRun>({
-      rootDir: path.join(projectRoot, '.comet/runtime/sdk-runs/native'),
+      rootDir: path.join(paths.workspaceRuntimeRoot, 'sdk-runs/native'),
     });
     if (!(await store.compareAndSwap(manifest.name, null, rebound)))
       throw new Error('Native Supervisor transfer Run was created by another process');
     await createNativeSdkStateStore(projectRoot).read(manifest.name);
   }
-  const receiptRef = `.comet/runtime/transfers/native/${manifest.name}.json`;
-  await ensureProtectedProjectDirectory(projectRoot, '.comet/runtime/transfers/native', {
+  const receiptRef = `transfers/native/${manifest.name}.json`;
+  await ensureProtectedProjectDirectory(paths.workspaceRuntimeRoot, 'transfers/native', {
     label: 'Native Supervisor transfer receipt directory',
   });
   await atomicWriteContainedText(
-    path.join(projectRoot, ...receiptRef.split('/')),
+    path.join(paths.workspaceRuntimeRoot, ...receiptRef.split('/')),
     `${JSON.stringify({
       schema: SCHEMA,
       change: manifest.name,
@@ -963,7 +979,7 @@ export async function importNativeSupervisorTransfer(options: {
           ),
         })),
     })}\n`,
-    { containedRoot: projectRoot, exclusive: true, requireAtomicPublication: true },
+    { containedRoot: paths.workspaceRuntimeRoot, exclusive: true, requireAtomicPublication: true },
   );
   await registerSdkChangeOwner(projectRoot, {
     schema: COMET_CHANGE_OWNER_SCHEMA,

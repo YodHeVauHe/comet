@@ -76,7 +76,7 @@ function displayChangeSection(
     );
     if (c.error) {
       console.log(`     error: ${c.error}`);
-      console.log('     next: inspect .comet.yaml and rerun comet doctor');
+      console.log('     next: inspect the Classic state file and rerun comet doctor');
       console.log();
       continue;
     }

@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { getCurrentVersion } from '../../../platform/version/version.js';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -25,10 +26,12 @@ import {
   type SkillAdapterContract,
 } from '../../../domains/workflow-application/index.js';
 import type { ClassicProfile } from '../../../domains/comet-classic/classic-state.js';
+import { createOpenSpecArchiveFixture } from '../../helpers/classic-openspec-fixture.js';
 
 const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -47,6 +50,8 @@ async function fixture(
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'classic-composition-'));
   roots.push(root);
+  const openSpec = await createOpenSpecArchiveFixture(root);
+  vi.stubEnv('COMET_OPENSPEC', openSpec.command);
   const projectRoot = path.join(root, 'project');
   const packageRoot = path.join(root, 'package');
   const changeRef = 'docs/openspec/changes/example';
@@ -229,7 +234,7 @@ async function fixture(
   };
   const implementation = classic.createClassicApplication(context, options);
   const store = createFileRuntimeStore<WorkflowRun>({
-    rootDir: path.join(projectRoot, '.comet/runtime/applications', manifest.id),
+    rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'applications', manifest.id),
   });
   const runtimeFactory = () =>
     createRuntime({ ...implementation, store: implementation.wrapStore!(store, identity) });
@@ -430,6 +435,7 @@ async function fixture(
   };
   return {
     root,
+    openSpec,
     projectRoot,
     context,
     options,
@@ -747,6 +753,12 @@ it.each(['full', 'hotfix', 'tweak'] as const)(
       context: { requestId: 'public-archive', projectRoot: f.projectRoot },
     });
     expect(f.run.state).toMatchObject({ archived: true });
+    expect(await f.openSpec.invocations()).toEqual([
+      {
+        args: ['archive', 'example', '--yes'],
+        cwd: await fs.realpath(path.join(f.projectRoot, 'docs')),
+      },
+    ]);
     const archiveRef = (
       f.run.actions.findLast((action) => action.stepId.endsWith('.archive.execute'))!.outcome!
         .output as { archiveDirectory: string }
@@ -768,7 +780,7 @@ it.each(['full', 'hotfix', 'tweak'] as const)(
     expect(f.run.status).toBe('completed');
 
     await expect(inspectClassicSdkRun(f.projectRoot, 'example')).rejects.toThrow();
-    const file = path.join(f.projectRoot, archiveRef, '.comet.yaml');
+    const file = path.join(f.projectRoot, archiveRef, 'comet-state.yaml');
     expect(await fs.readFile(file, 'utf8')).toContain('application_checkpoint:');
     await expect(createClassicSdkStateStore(f.projectRoot).read('example')).rejects.toThrow(
       /original fixed Application/,
@@ -935,7 +947,7 @@ it('recovers the fixed Classic Application through public CLI across processes a
     attempt: action.attempt,
     reason: 'Process stopped',
   });
-  await fs.rm(path.join(clone, '.comet/runtime'), { recursive: true, force: true });
+  await fs.rm(resolveWorkspaceRuntimeRootSync(clone), { recursive: true, force: true });
   run = await dispatch({ operation: 'inspect', runId: 'example' });
   expect(run.actions.at(-1)).toMatchObject({
     id: action.id,
@@ -1044,7 +1056,7 @@ it('keeps action-sourced extension receipts valid after portable recovery withou
     }
   ).activation.source;
   expect(source.event.outcome.claimToken).toBe('source-reference');
-  await fs.rm(path.join(f.projectRoot, '.comet/runtime'), { recursive: true, force: true });
+  await fs.rm(resolveWorkspaceRuntimeRootSync(f.projectRoot), { recursive: true, force: true });
   f.runtime = f.runtimeFactory();
   await f.refresh();
   await f.work(await f.reviewOutput());
@@ -1092,6 +1104,12 @@ it.each(['hotfix', 'tweak'] as const)(
       executorId: 'comet-classic-archive',
       context: { requestId: 'upgrade-archive', projectRoot: f.projectRoot },
     });
+    expect(await f.openSpec.invocations()).toEqual([
+      {
+        args: ['archive', 'example', '--yes'],
+        cwd: await fs.realpath(path.join(f.projectRoot, 'docs')),
+      },
+    ]);
     const archiveRef = (
       f.run.actions.findLast((action) => action.stepId === 'full.archive.execute')!.outcome!
         .output as { archiveDirectory: string }

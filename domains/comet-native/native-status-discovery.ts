@@ -755,8 +755,8 @@ async function conflictsWithSdkOwner(
   if (!(await hasNativeManagedRunMarker(stateFile))) return true;
   const localFile = nativeLocalExecutionFile(candidate.source.paths, candidate.name);
   const local = await inspectProtectedProjectPath(
-    candidate.source.projectRoot,
-    path.relative(candidate.source.projectRoot, localFile),
+    candidate.source.paths.workspaceRuntimeRoot,
+    path.relative(candidate.source.paths.workspaceRuntimeRoot, localFile),
     { label: 'Native local execution state', expected: 'file' },
   );
   return local.exists;

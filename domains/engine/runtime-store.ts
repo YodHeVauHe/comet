@@ -3,8 +3,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { sameFileObject } from '../../platform/fs/file-identity.js';
+import { RaceSafeReadError } from '../../platform/fs/race-safe-read.js';
+import { withRecoverableFileLock } from '../../platform/fs/recoverable-file-lock.js';
 
-import { atomicWriteContainedText } from '../workflow-contract/contained-atomic-write.js';
+import {
+  atomicWriteContainedText,
+  removeContainedFile,
+} from '../workflow-contract/contained-atomic-write.js';
 import {
   ensureProtectedProjectDirectory,
   inspectProtectedProjectPath,
@@ -170,8 +175,9 @@ export interface FileRuntimeStoreOptions {
 }
 
 /**
- * 使用原子硬链接发布不可变版本。正常版本连续递增；恢复基线明确记录原 revision，
- * 之后的版本继续连续递增。中断只会留下前一个版本或完整的新版本，不依赖锁接管。
+ * 使用可恢复的跨进程锁串行 CAS，以原子替换保存一个带校验值的完整 checkpoint。
+ * 旧版本历史只在写入时迁移：先验证、发布新 authority 和格式标记，再清理已覆盖文件。
+ * 不使用增量日志；checkpoint 内的业务历史仍由调用者维护。
  */
 export function createFileRuntimeStore<T extends RuntimeRecord>(
   options: FileRuntimeStoreOptions,
@@ -213,17 +219,80 @@ export function createFileRuntimeStore<T extends RuntimeRecord>(
   const runDirectory = (runId: string) =>
     createHash('sha256').update(JSON.stringify(runId)).digest('hex');
 
-  async function read(runId: string): Promise<T | null> {
+  const currentName = 'checkpoint.json';
+  const formatSchema = 'comet.runtime-store-format.v2';
+  const compactDirectory = '.runtime-store-v2';
+  const compactRunDirectory = (runId: string) => `${compactDirectory}/${runDirectory(runId)}`;
+  const compactSchema = 'comet.runtime-store-snapshot.v2';
+  const lockName = '.write.lock';
+  const revisionPattern = /^[0-9]{16}\.json$/u;
+
+  interface StoreState {
+    record: T | null;
+    compacted: boolean;
+    legacyRevision: number | null;
+    formatPresent: boolean;
+  }
+
+  function emptyState(): StoreState {
+    return {
+      record: null,
+      compacted: false,
+      legacyRevision: null,
+      formatPresent: false,
+    };
+  }
+
+  async function readJson(runRef: string, name: string): Promise<unknown> {
+    const result = await readProtectedProjectFile(
+      rootDir,
+      runRef ? `${runRef}/${name}` : name,
+      Number.MAX_SAFE_INTEGER,
+      { label: 'RuntimeStore record' },
+    );
+    try {
+      const value: unknown = JSON.parse(
+        new TextDecoder('utf-8', { fatal: true }).decode(result.bytes),
+      );
+      validateRuntimeValue(value);
+      return value;
+    } catch {
+      throw new RuntimeProtocolError('STORE_CORRUPT_RECORD', '版本文件不是有效的 UTF-8 JSON 数据');
+    }
+  }
+
+  function assertRecord(record: T, runId: string, revision: number): void {
+    if (
+      !record ||
+      typeof record !== 'object' ||
+      Array.isArray(record) ||
+      record.runId !== runId ||
+      record.revision !== revision ||
+      !Number.isSafeInteger(revision) ||
+      revision < 1
+    ) {
+      throw new RuntimeProtocolError(
+        'STORE_CORRUPT_RECORD',
+        '版本文件的 runId 或 revision 与目标不一致',
+      );
+    }
+    assertMirroredRevisions(record);
+  }
+
+  async function readState(
+    runId: string,
+    validateLegacy = false,
+    runRef = runDirectory(runId),
+  ): Promise<StoreState> {
     assertRunId(runId);
     if (!(await inspectProtectedProjectPath(volumeRoot, rootRelative, rootOptions)).exists) {
-      return null;
+      return emptyState();
     }
-    const runRef = runDirectory(runId);
     const inspection = await inspectProtectedProjectPath(rootDir, runRef, {
       label: 'RuntimeStore run',
       expected: 'directory',
     });
-    if (!inspection.exists) return null;
+    if (!inspection.exists) return emptyState();
     const before = await fs.lstat(inspection.target);
     const entries = await fs.readdir(inspection.target, { withFileTypes: true });
     const after = await fs.lstat(inspection.target);
@@ -240,70 +309,122 @@ export function createFileRuntimeStore<T extends RuntimeRecord>(
     ) {
       throw new RuntimeProtocolError('STORE_CHANGED_DIRECTORY', '读取版本列表时 Run 目录已变化');
     }
-    let revisionCount = 0;
+    const names = new Set<string>();
+    const legacyNames: string[] = [];
     let latestRevision = 0;
-    let latestName: string | undefined;
     for (const entry of entries) {
-      if (/^\..+\.tmp$/u.test(entry.name)) continue;
-      if (!entry.isFile() || entry.isSymbolicLink() || !/^[0-9]{16}\.json$/u.test(entry.name)) {
+      if (
+        (entry.name === `${lockName}.contenders` ||
+          (entry.name === 'legacy' && runRef === compactRunDirectory(runId))) &&
+        entry.isDirectory() &&
+        !entry.isSymbolicLink()
+      )
+        continue;
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new RuntimeProtocolError('STORE_INVALID_ENTRY', `版本文件无效：${entry.name}`);
+      }
+      if (
+        /^\..+\.tmp$/u.test(entry.name) ||
+        entry.name === lockName ||
+        /^\.write\.lock\.[a-f0-9-]+\.removed$/u.test(entry.name)
+      )
+        continue;
+      names.add(entry.name);
+      if (entry.name === currentName) continue;
+      if (!revisionPattern.test(entry.name)) {
         throw new RuntimeProtocolError('STORE_INVALID_ENTRY', `版本文件无效：${entry.name}`);
       }
       const revision = Number(entry.name.slice(0, -5));
       if (!Number.isSafeInteger(revision) || revision < 1) {
         throw new RuntimeProtocolError('STORE_INVALID_ENTRY', `版本文件无效：${entry.name}`);
       }
-      revisionCount += 1;
-      if (revision > latestRevision) {
-        latestRevision = revision;
-        latestName = entry.name;
-      }
+      legacyNames.push(entry.name);
+      latestRevision = Math.max(latestRevision, revision);
     }
-    if (!latestName) return null;
-    const records = new Map<number, unknown>();
-    async function readRecord(revision: number): Promise<unknown> {
-      if (records.has(revision)) return records.get(revision);
-      const result = await readProtectedProjectFile(
-        rootDir,
-        `${runRef}/${String(revision).padStart(16, '0')}.json`,
-        Number.MAX_SAFE_INTEGER,
-        { label: 'RuntimeStore revision' },
-      );
-      try {
-        const value: unknown = JSON.parse(
-          new TextDecoder('utf-8', { fatal: true }).decode(result.bytes),
-        );
-        validateRuntimeValue(value);
-        records.set(revision, value);
-        return value;
-      } catch {
+    const formatPresent = false;
+    if (runRef === compactRunDirectory(runId) && legacyNames.length > 0) {
+      throw new RuntimeProtocolError('STORE_INVALID_ENTRY', 'checkpoint 目录不能包含旧版本文件');
+    }
+    if (names.has(currentName)) {
+      if (runRef !== compactRunDirectory(runId)) {
+        throw new RuntimeProtocolError('STORE_INVALID_ENTRY', '旧版本目录包含未知 checkpoint');
+      }
+      const snapshot = (await readJson(runRef, currentName)) as {
+        schema?: unknown;
+        record?: T;
+        hash?: unknown;
+        legacyRevision?: unknown;
+      } | null;
+      const record = snapshot?.record;
+      const legacyRevision = snapshot?.legacyRevision;
+      if (
+        !snapshot ||
+        snapshot.schema !== compactSchema ||
+        !record ||
+        Object.keys(snapshot).some(
+          (key) => !['schema', 'record', 'hash', 'legacyRevision'].includes(key),
+        ) ||
+        (legacyRevision !== null &&
+          (!Number.isSafeInteger(legacyRevision) ||
+            (legacyRevision as number) < 1 ||
+            (legacyRevision as number) > record.revision)) ||
+        snapshot.hash !== hashRuntimeValue({ record, legacyRevision })
+      ) {
         throw new RuntimeProtocolError(
           'STORE_CORRUPT_RECORD',
-          '版本文件不是有效的 UTF-8 JSON 数据',
+          'RuntimeStore checkpoint 损坏或校验值不一致',
         );
       }
+      assertRecord(record, runId, record.revision);
+      return {
+        record,
+        compacted: true,
+        legacyRevision: legacyRevision as number | null,
+        formatPresent,
+      };
+    }
+    if (!latestRevision) return emptyState();
+    const records = new Map<number, unknown>();
+    const revisionName = (revision: number) => `${String(revision).padStart(16, '0')}.json`;
+    const hasRevision = (revision: number) => names.has(revisionName(revision));
+    async function readRecord(revision: number): Promise<unknown> {
+      if (records.has(revision)) return records.get(revision);
+      const value = await readJson(runRef, revisionName(revision));
+      // 迁移逐个校验历史，不能把 N 份完整快照一起保留在内存中。
+      if (revision <= 2 || revision === latestRevision) records.set(revision, value);
+      return value;
+    }
+    async function result(
+      record: T,
+      baselineSlot = 0,
+      revision = latestRevision,
+    ): Promise<StoreState> {
+      assertRecord(record, runId, revision);
+      if (validateLegacy) {
+        for (const name of legacyNames) {
+          const revision = Number(name.slice(0, -5));
+          if (revision === baselineSlot) continue;
+          assertRecord((await readRecord(revision)) as T, runId, revision);
+        }
+      }
+      return {
+        record,
+        compacted: false,
+        legacyRevision: record.revision,
+        formatPresent: false,
+      };
     }
     const latest = (await readRecord(latestRevision)) as T & { schema?: unknown };
     if (
-      latestRevision === revisionCount &&
+      latestRevision === legacyNames.length &&
       (latest?.schema !== CHECKPOINT_SCHEMA || latest?.runId !== undefined)
     ) {
-      if (latest?.runId !== runId || latest.revision !== latestRevision) {
-        throw new RuntimeProtocolError(
-          'STORE_CORRUPT_RECORD',
-          '版本文件的 runId 或 revision 与目标不一致',
-        );
-      }
-      assertMirroredRevisions(latest);
-      return latest;
+      return result(latest);
     }
-    const names = new Set(entries.map((entry) => entry.name));
-    const hasRevision = (revision: number) =>
-      names.has(`${String(revision).padStart(16, '0')}.json`);
     if (!hasRevision(1)) {
       throw new RuntimeProtocolError('STORE_MISSING_REVISION', '版本历史缺少 revision 1');
     }
     let baseline: { slot: number; record: T } | null = null;
-    // 恢复基线占用正常创建/CAS 的同一原子发布位置；缺失历史不会伪装成执行记录。
     for (const slot of [1, 2]) {
       if (!hasRevision(slot)) break;
       const value = (await readRecord(slot)) as {
@@ -335,10 +456,9 @@ export function createFileRuntimeStore<T extends RuntimeRecord>(
     const historyEnd = latestRevision === baseSlot ? baseRevision : latestRevision;
     if (
       historyEnd < baseRevision ||
-      revisionCount !== historyEnd - baseRevision + baseSlot ||
-      entries.some((entry) => {
-        if (!/^[0-9]{16}\.json$/u.test(entry.name)) return false;
-        const revision = Number(entry.name.slice(0, -5));
+      legacyNames.length !== historyEnd - baseRevision + baseSlot ||
+      legacyNames.some((name) => {
+        const revision = Number(name.slice(0, -5));
         return revision > baseSlot && revision <= baseRevision;
       })
     ) {
@@ -346,35 +466,175 @@ export function createFileRuntimeStore<T extends RuntimeRecord>(
       while (hasRevision(missing)) missing += 1;
       throw new RuntimeProtocolError('STORE_MISSING_REVISION', `版本历史缺少 revision ${missing}`);
     }
-    if (baseline && latestRevision === baseline.slot) return baseline.record;
-    const value = (await readRecord(latestRevision)) as T;
-    if (!value || typeof value !== 'object' || value.runId !== runId) {
-      throw new RuntimeProtocolError(
-        'STORE_CORRUPT_RECORD',
-        '版本文件的 runId 与目标 runId 不一致',
-      );
-    }
-    if (value.revision !== latestRevision) {
-      throw new RuntimeProtocolError('STORE_CORRUPT_RECORD', '版本文件的 revision 与文件名不一致');
-    }
-    assertMirroredRevisions(value);
-    return value;
+    return result(
+      baseline && latestRevision === baseline.slot ? baseline.record : latest,
+      baseSlot,
+      baseline && latestRevision === baseline.slot ? baseline.record.revision : latestRevision,
+    );
   }
 
-  async function publish(runId: string, slot: number, serialized: string): Promise<boolean> {
-    await ensureProtectedProjectDirectory(volumeRoot, rootRelative, rootOptions);
-    const runRef = runDirectory(runId);
-    await ensureProtectedProjectDirectory(rootDir, runRef, { label: 'RuntimeStore run' });
-    const file = path.join(rootDir, runRef, `${String(slot).padStart(16, '0')}.json`);
-    try {
-      await atomicWriteContainedText(file, serialized + '\n', {
-        containedRoot: rootDir,
-        exclusive: true,
-        requireAtomicPublication: true,
+  interface FormatMarker {
+    schema: string;
+    runId: string;
+    state: 'pending' | 'ready';
+  }
+
+  async function layout(runId: string) {
+    let original = await inspectProtectedProjectPath(rootDir, runDirectory(runId), {
+      label: 'RuntimeStore format',
+      expected: 'any',
+    });
+    const staged = await inspectProtectedProjectPath(
+      rootDir,
+      `${compactRunDirectory(runId)}/legacy`,
+      {
+        label: 'RuntimeStore legacy',
+        expected: 'directory',
+      },
+    );
+    if (original.kind === 'directory' && staged.exists) {
+      original = await inspectProtectedProjectPath(rootDir, runDirectory(runId), {
+        label: 'RuntimeStore format',
+        expected: 'any',
       });
-      return true;
+    }
+    if (original.kind === 'directory' && staged.exists) {
+      throw new RuntimeProtocolError(
+        'STORE_MIGRATION_CONFLICT',
+        '旧写入者在迁移期间重新创建了 Run 目录；请停止旧版本进程并检查两处版本历史',
+      );
+    }
+    let marker: FormatMarker | null = null;
+    if (original.kind === 'file') {
+      const value = (await readJson('', runDirectory(runId))) as FormatMarker | null;
+      if (
+        !value ||
+        value.schema !== formatSchema ||
+        value.runId !== runId ||
+        !['pending', 'ready'].includes(value.state) ||
+        Object.keys(value).some((key) => !['schema', 'runId', 'state'].includes(key))
+      ) {
+        throw new RuntimeProtocolError('STORE_CORRUPT_RECORD', 'RuntimeStore 格式标记损坏');
+      }
+      marker = value;
+    }
+    return { original, staged, marker };
+  }
+
+  async function readCurrent(runId: string): Promise<T | null> {
+    assertRunId(runId);
+    if (!(await inspectProtectedProjectPath(volumeRoot, rootRelative, rootOptions)).exists)
+      return null;
+    const state = await layout(runId);
+    const compact = await readState(runId, false, compactRunDirectory(runId));
+    if (compact.record) {
+      if (!state.marker && !(await layout(runId)).marker) {
+        throw new RuntimeProtocolError('STORE_CORRUPT_RECORD', 'RuntimeStore 格式标记缺失');
+      }
+      return compact.record;
+    }
+    if (state.original.kind === 'directory') {
+      const legacy = (await readState(runId)).record;
+      if (!legacy && (await layout(runId)).original.kind !== 'directory') {
+        throw new RuntimeProtocolError('STORE_CHANGED_LAYOUT', '读取期间旧 Run 已迁移');
+      }
+      return legacy;
+    }
+    if (state.marker?.state === 'ready') {
+      throw new RuntimeProtocolError(
+        'STORE_CORRUPT_RECORD',
+        'RuntimeStore checkpoint 缺失，不能回退到旧版本',
+      );
+    }
+    if (state.staged.exists) {
+      let legacy: T | null;
+      try {
+        legacy = (await readState(runId, false, `${compactRunDirectory(runId)}/legacy`)).record;
+      } catch (error) {
+        // 目录枚举后可能已发布新 checkpoint 并开始回收旧文件；不能把回收间隙误报为历史损坏。
+        if ((await layout(runId)).marker?.state === 'ready') {
+          throw new RuntimeProtocolError('STORE_CHANGED_LAYOUT', '读取期间旧 Run 已压缩');
+        }
+        throw error;
+      }
+      if (!legacy) {
+        const after = await layout(runId);
+        if (!after.staged.exists || after.marker?.state === 'ready') {
+          throw new RuntimeProtocolError('STORE_CHANGED_LAYOUT', '读取期间旧 Run 已压缩');
+        }
+      }
+      return legacy;
+    }
+    return null;
+  }
+
+  async function read(runId: string): Promise<T | null> {
+    // 原子替换和迁移可能发生在两次安全路径检查之间；损坏数据从不降级到旧快照。
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await readCurrent(runId);
+      } catch (error) {
+        const concurrentRead = error instanceof RaceSafeReadError && error.reason === 'changed';
+        const disappeared = ['ENOENT', 'ENOTDIR'].includes(
+          (error as NodeJS.ErrnoException).code ?? '',
+        );
+        const moved =
+          error instanceof Error &&
+          /must be a real directory|STORE_CHANGED_DIRECTORY|STORE_CHANGED_LAYOUT/u.test(
+            error.message,
+          );
+        if ((!concurrentRead && !disappeared && !moved) || attempt >= 15) throw error;
+      }
+    }
+  }
+
+  async function writeMarker(
+    runId: string,
+    state: FormatMarker['state'],
+    exclusive: boolean,
+  ): Promise<void> {
+    await atomicWriteContainedText(
+      path.join(rootDir, runDirectory(runId)),
+      JSON.stringify({
+        schema: formatSchema,
+        runId,
+        state,
+      }) + '\n',
+      { containedRoot: rootDir, exclusive, requireAtomicPublication: true },
+    );
+  }
+
+  async function syncDirectory(directory: string): Promise<void> {
+    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+    try {
+      handle = await fs.open(directory, 'r');
+      await handle.sync();
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      // 与 contained-atomic-write 相同：不支持目录 fsync 的文件系统仍可使用原子发布。
+      if (
+        !['EACCES', 'EBADF', 'EINVAL', 'EISDIR', 'ENOTSUP', 'EPERM'].includes(
+          (error as NodeJS.ErrnoException).code ?? '',
+        )
+      )
+        throw error;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  async function withWriter<R>(runId: string, operation: () => Promise<R>): Promise<R> {
+    await ensureProtectedProjectDirectory(volumeRoot, rootRelative, rootOptions);
+    await ensureProtectedProjectDirectory(rootDir, compactRunDirectory(runId), {
+      label: 'RuntimeStore run',
+    });
+    await syncDirectory(path.join(rootDir, compactDirectory));
+    await syncDirectory(rootDir);
+    try {
+      return await withRecoverableFileLock(
+        path.join(rootDir, compactRunDirectory(runId), lockName),
+        operation,
+      );
+    } catch (error) {
       if (['ENOTSUP', 'EOPNOTSUPP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
         throw new RuntimeProtocolError(
           'STORE_ATOMIC_PUBLICATION_UNSUPPORTED',
@@ -385,30 +645,152 @@ export function createFileRuntimeStore<T extends RuntimeRecord>(
     }
   }
 
+  async function publish(runId: string, record: T, state: StoreState): Promise<void> {
+    const directory = path.join(rootDir, compactRunDirectory(runId));
+    const legacyRevision = state.legacyRevision;
+    await atomicWriteContainedText(
+      path.join(directory, currentName),
+      JSON.stringify({
+        schema: compactSchema,
+        record,
+        legacyRevision,
+        hash: hashRuntimeValue({ record, legacyRevision }),
+      }) + '\n',
+      { containedRoot: rootDir, exclusive: !state.compacted, requireAtomicPublication: true },
+    );
+    if (!state.formatPresent) await writeMarker(runId, 'ready', false);
+  }
+
+  async function cleanLegacy(runId: string, legacyRevision: number | null): Promise<void> {
+    if (legacyRevision === null) return;
+    const reference = `${compactRunDirectory(runId)}/legacy`;
+    const staged = await inspectProtectedProjectPath(rootDir, reference, {
+      label: 'RuntimeStore legacy',
+      expected: 'directory',
+    });
+    if (!staged.exists) return;
+    // authority 与格式标记均已持久化。只清理其覆盖的版本文件，临时文件保留供排查。
+    try {
+      for (const entry of await fs.readdir(staged.target, { withFileTypes: true })) {
+        if (
+          entry.isFile() &&
+          !entry.isSymbolicLink() &&
+          revisionPattern.test(entry.name) &&
+          Number(entry.name.slice(0, -5)) <= legacyRevision
+        ) {
+          await removeContainedFile(path.join(staged.target, entry.name), {
+            containedRoot: rootDir,
+          });
+        }
+      }
+      await inspectProtectedProjectPath(rootDir, reference, {
+        label: 'RuntimeStore legacy',
+        expected: 'directory',
+      });
+      await fs.rmdir(staged.target).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOTEMPTY' && error.code !== 'EEXIST') throw error;
+      });
+    } catch (error) {
+      process.stderr.write(
+        `[comet] warning: RuntimeStore checkpoint 已提交，旧版本清理将在下次写入重试：${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+  }
+
+  async function prepareWriter(runId: string): Promise<StoreState> {
+    let inspected = await layout(runId);
+    const existing = await readState(runId, false, compactRunDirectory(runId));
+    if (existing.record && !inspected.marker) {
+      throw new RuntimeProtocolError(
+        'STORE_CORRUPT_RECORD',
+        'RuntimeStore 格式标记缺失，不能恢复旧写入路径',
+      );
+    }
+    if (inspected.original.kind === 'directory') {
+      // 两次完整验证夹住迁移：旧进程在 rename 前已成功的发布必须包含在恢复基线中。
+      await readState(runId, true);
+      const before = await fs.lstat(inspected.original.target);
+      await inspectProtectedProjectPath(
+        volumeRoot,
+        `${rootRelative}/${runDirectory(runId)}`,
+        rootOptions,
+      );
+      await inspectProtectedProjectPath(rootDir, compactRunDirectory(runId), rootOptions);
+      await fs.rename(inspected.original.target, inspected.staged.target);
+      const moved = await fs.lstat(inspected.staged.target);
+      if (
+        !moved.isDirectory() ||
+        moved.isSymbolicLink() ||
+        !sameFileObject(
+          { dev: before.dev, ino: before.ino, birthtime: before.birthtimeMs },
+          { dev: moved.dev, ino: moved.ino, birthtime: moved.birthtimeMs },
+        )
+      )
+        throw new RuntimeProtocolError('STORE_CHANGED_DIRECTORY', '迁移时旧 Run 目录已变化');
+      // 先持久化目标目录项，再持久化源目录移除；fence 不能比旧历史的迁移更早落盘。
+      await syncDirectory(path.join(rootDir, compactRunDirectory(runId)));
+      await syncDirectory(rootDir);
+      inspected = await layout(runId);
+    }
+    if (!inspected.marker) {
+      try {
+        await writeMarker(runId, 'pending', true);
+      } catch (error) {
+        if (['EEXIST', 'EISDIR', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+          throw new RuntimeProtocolError(
+            'STORE_MIGRATION_CONFLICT',
+            '旧写入者在迁移期间重新创建了 Run 路径；已保留迁移现场，未提交新 checkpoint',
+          );
+        }
+        throw error;
+      }
+      inspected = await layout(runId);
+    }
+    let state = existing;
+    if (!state.record && inspected.marker?.state === 'ready') {
+      throw new RuntimeProtocolError(
+        'STORE_CORRUPT_RECORD',
+        'RuntimeStore checkpoint 缺失，不能回退到旧版本',
+      );
+    }
+    if (!state.record && inspected.staged.exists) {
+      state = await readState(runId, true, `${compactRunDirectory(runId)}/legacy`);
+      if (state.record) {
+        await publish(runId, state.record, state);
+        state = { ...state, compacted: true, formatPresent: true };
+      }
+    } else if (state.record && inspected.marker?.state === 'pending') {
+      await writeMarker(runId, 'ready', false);
+    }
+    if (state.record) {
+      state.formatPresent = true;
+      await cleanLegacy(runId, state.legacyRevision);
+    }
+    return state;
+  }
+
   return {
     read,
     async restoreCheckpoint(runId, expectedRevision, checkpoint) {
       const snapshot = JSON.parse(serializeCheckpoint(runId, expectedRevision, checkpoint)) as T;
       assertMirroredRevisions(snapshot);
-      if (!matchesCheckpoint(await read(runId), expectedRevision, snapshot, revisionPaths))
-        return false;
-      return publish(
-        runId,
-        (expectedRevision ?? 0) + 1,
-        JSON.stringify({
-          schema: CHECKPOINT_SCHEMA,
-          record: snapshot,
-          hash: hashRuntimeValue(snapshot),
-        }),
-      );
+      return withWriter(runId, async () => {
+        const state = await prepareWriter(runId);
+        if (!matchesCheckpoint(state.record, expectedRevision, snapshot, revisionPaths))
+          return false;
+        await publish(runId, snapshot, state);
+        return true;
+      });
     },
     async compareAndSwap(runId, expectedRevision, next) {
-      const serialized = serializeNext(runId, expectedRevision, next);
-      if (revisionPaths.length > 0) assertMirroredRevisions(JSON.parse(serialized) as T);
-      const nextRevision = (expectedRevision ?? 0) + 1;
-      const current = await read(runId);
-      if ((current?.revision ?? null) !== expectedRevision) return false;
-      return publish(runId, nextRevision, serialized);
+      const snapshot = JSON.parse(serializeNext(runId, expectedRevision, next)) as T;
+      assertMirroredRevisions(snapshot);
+      return withWriter(runId, async () => {
+        const state = await prepareWriter(runId);
+        if ((state.record?.revision ?? null) !== expectedRevision) return false;
+        await publish(runId, snapshot, state);
+        return true;
+      });
     },
   };
 }

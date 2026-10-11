@@ -792,14 +792,17 @@ async function readNativeGitSelectionResults(
 ): Promise<NativeGitSelectionResults> {
   const projectRoot = path.resolve(paths.projectRoot);
   const selectionFile = path.join(projectRoot, '.comet', 'current-change.json');
-  const excludedRefs = [paths.nativeRoot, paths.runtimeDir, paths.configFile, selectionFile].map(
-    (target) => {
-      const relative = path.relative(projectRoot, path.resolve(target)).replaceAll('\\', '/');
-      const safe = safeGitProjectPath(relative);
-      if (safe === null) throw new Error('Native Git snapshot exclusion escaped the project root');
-      return safe;
-    },
-  );
+  const excludedRefs = [
+    paths.nativeRoot,
+    path.join(projectRoot, '.comet', 'runtime'),
+    paths.configFile,
+    selectionFile,
+  ].map((target) => {
+    const relative = path.relative(projectRoot, path.resolve(target)).replaceAll('\\', '/');
+    const safe = safeGitProjectPath(relative);
+    if (safe === null) throw new Error('Native Git snapshot exclusion escaped the project root');
+    return safe;
+  });
   // Policy excludes are excluded from snapshot content, so they must not be
   // fenced either: monitoring them turns unrelated background churn (dev
   // servers, build output) into git-selection-changed failures.
@@ -1066,7 +1069,7 @@ async function nativePhysicalSnapshotSelection(options: {
   // makes the whole physical selection non-overridable overflow evidence.
   const projectRoot = path.resolve(options.paths.projectRoot);
   const nativeRoot = path.resolve(options.paths.nativeRoot);
-  const runtimeRoot = path.resolve(options.paths.runtimeDir);
+  const runtimeRoot = path.join(projectRoot, '.comet', 'runtime');
   const configFile = path.resolve(options.paths.configFile);
   const selectionFile = path.join(projectRoot, '.comet', 'current-change.json');
   const records: NativePhysicalSelectionRecord[] = [];
@@ -1393,7 +1396,7 @@ function isSnapshotProjectRef(paths: NativeProjectPaths, relative: string): bool
   const target = path.resolve(paths.projectRoot, ...relative.split('/'));
   return (
     !sameOrInside(path.resolve(paths.nativeRoot), target) &&
-    !sameOrInside(path.resolve(paths.runtimeDir), target)
+    !sameOrInside(path.join(path.resolve(paths.projectRoot), '.comet', 'runtime'), target)
   );
 }
 
@@ -2396,7 +2399,7 @@ export async function createNativeContentSnapshot(
   const physicalProjectRoot = await fs.realpath(projectRoot);
   const nativeRoot = path.resolve(paths.nativeRoot);
   const physicalNativeRoot = await fs.realpath(nativeRoot);
-  const runtimeRoot = path.resolve(paths.runtimeDir);
+  const runtimeRoot = path.join(path.resolve(paths.projectRoot), '.comet', 'runtime');
   const configFile = path.resolve(paths.configFile);
   const selectionFile = path.join(projectRoot, '.comet', 'current-change.json');
   const denylist = normalizedDenylist(projectRoot, options.denylist ?? []);

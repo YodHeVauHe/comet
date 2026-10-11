@@ -352,6 +352,7 @@ const NATIVE_PHYSICAL_INPUT_EXCLUDED_DIRECTORIES = new Set([
 // invalidate its own binding. The project configuration remains an input and is
 // intentionally not excluded.
 const NATIVE_RUNTIME_INPUT_EXCLUSIONS = [
+  ':(exclude).comet/runtime',
   ':(exclude).comet/runtime/**',
   ':(exclude).comet/current-change.json',
 ] as const;
@@ -385,7 +386,11 @@ function isNativeRuntimeInputPath(
   managedArtifactRoot?: string,
 ): boolean {
   const normalized = relative.replaceAll('\\', '/').replace(/^\.\//u, '');
-  if (normalized === '.comet/current-change.json' || normalized.startsWith('.comet/runtime/')) {
+  if (
+    normalized === '.comet/current-change.json' ||
+    normalized === '.comet/runtime' ||
+    normalized.startsWith('.comet/runtime/')
+  ) {
     return true;
   }
   if (

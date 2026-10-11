@@ -7,6 +7,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as gitCommands from '../../../platform/process/git.js';
+import { ensureCometProjectGitignore } from '../../../domains/workflow-contract/project-gitignore.js';
 import { nativeArchiveCommand } from '../../../domains/comet-native/native-archive-command.js';
 import { atomicWriteJson } from '../../../domains/comet-native/native-atomic-file.js';
 import {
@@ -185,6 +186,13 @@ describe('Native portable Archive', () => {
     }).trim();
   }
 
+  async function refreshRuntimePathsAfterGitInit(): Promise<void> {
+    // Git 初始化切换 workspace 身份；后续候选和 CLI 必须使用同一个新 Runtime。
+    paths = await nativeProjectPaths(root, 'docs');
+    await ensureNativeDirectories(paths);
+    await ensureCometProjectGitignore(root);
+  }
+
   async function commitHookProject(
     name: string,
     rejectAll = false,
@@ -197,10 +205,7 @@ describe('Native portable Archive', () => {
     const hook = path.join(root, '.git/hooks/commit-msg');
     git(['config', 'core.hooksPath', path.dirname(hook)]);
     git(['config', 'commit.gpgsign', 'false']);
-    await fs.writeFile(
-      path.join(root, '.gitignore'),
-      '.comet/runtime/\n.comet/current-change.json\n',
-    );
+    await refreshRuntimePathsAfterGitInit();
     git(['add', '.']);
     git(['commit', '-m', 'PROJ: baseline']);
     const primary = root;
@@ -550,10 +555,7 @@ describe('Native portable Archive', () => {
       git(['config', 'user.email', 'native-test@example.com']);
       git(['config', 'user.name', 'Native Test']);
       git(['config', 'commit.gpgsign', 'false']);
-      await fs.writeFile(
-        path.join(root, '.gitignore'),
-        '.comet/runtime/\n.comet/current-change.json\n',
-      );
+      await refreshRuntimePathsAfterGitInit();
       await fs.writeFile(
         path.join(root, '.gitattributes'),
         '*.txt text eol=lf\n*.filter filter=comet-upper\n',
@@ -754,7 +756,7 @@ describe('Native portable Archive', () => {
     git(['init', '-b', 'main']);
     git(['config', 'user.email', 'native@example.test']);
     git(['config', 'user.name', 'Native Test']);
-    await fs.writeFile(path.join(root, '.gitignore'), '.comet/runtime/\n');
+    await refreshRuntimePathsAfterGitInit();
     const portable = await archiveReady('archive-target-refresh');
     await writeNativePortableState(
       path.join(nativePortableChangeDir(paths, portable.name), 'comet-state.yaml'),
@@ -990,7 +992,7 @@ children:
     execFileSync('git', ['init', '-b', 'main'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.email', 'native-test@example.com'], { cwd: root });
     execFileSync('git', ['config', 'user.name', 'Native Test'], { cwd: root });
-    await fs.writeFile(path.join(root, '.gitignore'), '.comet/runtime/\n');
+    await refreshRuntimePathsAfterGitInit();
     execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['commit', '-m', 'seed stale finish recovery'], {
       cwd: root,
@@ -1456,7 +1458,7 @@ children:
     execFileSync('git', ['init', '-b', 'main'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.email', 'native-test@example.com'], { cwd: root });
     execFileSync('git', ['config', 'user.name', 'Native Test'], { cwd: root });
-    await fs.writeFile(path.join(root, '.gitignore'), '.comet/runtime/\n');
+    await refreshRuntimePathsAfterGitInit();
     execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['commit', '-m', 'seed native archive one-step'], {
       cwd: root,
@@ -1498,7 +1500,7 @@ children:
     execFileSync('git', ['init', '-b', 'main'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.email', 'native-test@example.com'], { cwd: root });
     execFileSync('git', ['config', 'user.name', 'Native Test'], { cwd: root });
-    await fs.writeFile(path.join(root, '.gitignore'), '.comet/runtime/\n');
+    await refreshRuntimePathsAfterGitInit();
     execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['commit', '-m', 'seed native archive preflight'], {
       cwd: root,
@@ -1560,7 +1562,7 @@ children:
     execFileSync('git', ['init', '-b', 'main'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.email', 'native-test@example.com'], { cwd: root });
     execFileSync('git', ['config', 'user.name', 'Native Test'], { cwd: root });
-    await fs.writeFile(path.join(root, '.gitignore'), '.comet/runtime/\n');
+    await refreshRuntimePathsAfterGitInit();
     execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['commit', '-m', 'seed current Native archive'], {
       cwd: root,
@@ -1602,7 +1604,7 @@ children:
     execFileSync('git', ['init', '-b', 'main'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.email', 'native-test@example.com'], { cwd: root });
     execFileSync('git', ['config', 'user.name', 'Native Test'], { cwd: root });
-    await fs.writeFile(path.join(root, '.gitignore'), '.comet/runtime/\n');
+    await refreshRuntimePathsAfterGitInit();
     execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['commit', '-m', 'seed retryable Native archive'], {
       cwd: root,
@@ -1667,10 +1669,11 @@ children:
   });
 
   it('detects capability owners in another registered Git worktree', async () => {
-    const first = await archiveReady('primary-owner');
     execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
     execFileSync('git', ['config', 'user.email', 'native-test@example.com'], { cwd: root });
     execFileSync('git', ['config', 'user.name', 'Native Test'], { cwd: root });
+    await refreshRuntimePathsAfterGitInit();
+    const first = await archiveReady('primary-owner');
     execFileSync('git', ['add', '.'], { cwd: root });
     execFileSync('git', ['commit', '-m', 'test: seed portable change'], {
       cwd: root,

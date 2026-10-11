@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -25,7 +26,7 @@ async function fixture(supervisor = false) {
 }
 async function removeLocalStores(projectRoot: string) {
   for (const directory of ['applications', 'change-owners', 'state-projections'])
-    await fs.rm(path.join(projectRoot, '.comet/runtime', directory), {
+    await fs.rm(path.join(resolveWorkspaceRuntimeRootSync(projectRoot), '.', directory), {
       recursive: true,
       force: true,
     });

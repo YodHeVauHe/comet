@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../domains/workflow-contract/workspace-runtime.js';
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -60,7 +61,7 @@ describe('Runtime built-in inspect work budget', () => {
     expect(reads).toHaveBeenCalledTimes(2);
 
     await fs.writeFile(
-      path.join(root, '.comet/runtime/change-owners/native/inspect-budget.json'),
+      path.join(resolveWorkspaceRuntimeRootSync(root), 'change-owners/native/inspect-budget.json'),
       '{}',
     );
     const invalidOwner = await runtimeDispatchCommand(options);

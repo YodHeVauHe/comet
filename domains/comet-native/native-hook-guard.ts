@@ -107,7 +107,8 @@ function nativeFormalTargetReference(
 
 function nativeRuntimeManagedTarget(paths: NativeProjectPaths, target: string): boolean {
   return (
-    isWithin(paths.runtimeDir, target) ||
+    isWithin(paths.workspaceRuntimeRoot, target) ||
+    isWithin(path.join(paths.projectRoot, '.comet', 'runtime'), target) ||
     path.relative(paths.projectRoot, target).replaceAll('\\', '/') === '.comet/current-change.json'
   );
 }
@@ -149,11 +150,12 @@ function nativeUnownedTargetDecision(
     registeredChanges?: ReadonlySet<string>;
   } = {},
 ): NativeHookGuardResult | null {
-  if (!isWithin(projectRoot, target)) return null;
   if (nativeRuntimeManagedTarget(paths, target)) {
-    const runtimeRelative = path.relative(paths.projectRoot, target).replaceAll('\\', '/');
+    const runtimeRelative = isWithin(paths.workspaceRuntimeRoot, target)
+      ? path.relative(paths.workspaceRuntimeRoot, target).replaceAll('\\', '/')
+      : path.relative(paths.projectRoot, target).replaceAll('\\', '/');
     const runtimeChange = runtimeRelative.match(
-      /^\.comet\/runtime\/native\/changes\/([^/]+)(?:\/|$)/u,
+      /^(?:\.comet\/runtime\/)?native\/changes\/([^/]+)(?:\/|$)/u,
     )?.[1];
     return {
       allowed: false,
@@ -162,6 +164,7 @@ function nativeUnownedTargetDecision(
       ...(runtimeChange ? { change: runtimeChange } : {}),
     };
   }
+  if (!isWithin(projectRoot, target)) return null;
   const misroot = nativeKnownMisrootTarget(paths, target, options.registeredChanges ?? new Set());
   if (misroot) {
     const canonical = path.join(paths.changesDir, misroot.name, misroot.relative);
@@ -771,7 +774,7 @@ export async function inspectNativeHookGuard(
       registeredChanges,
     });
     if (unowned) {
-      preDecisions.push(unowned);
+      preDecisions.push({ ...unowned, phase: state.phase });
       continue;
     }
     const formal = nativeFormalTargetReference(context.paths.changesDir, target);

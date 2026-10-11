@@ -1,3 +1,5 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
+import { resolveClassicRunDirectory } from './classic-runtime-paths.js';
 import { createHash, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -15,7 +17,7 @@ import {
   writeArtifacts,
   writeCheckpoint,
   writeContext,
-} from '../../domains/engine/run-store.js';
+} from './classic-run-store.js';
 import type { Checkpoint, RunState, TrajectoryEvent } from '../../domains/engine/types.js';
 import {
   createSkillSnapshot,
@@ -140,9 +142,13 @@ async function ensureClassicRunLocked(
   options: EnsureClassicRunOptions,
 ): Promise<ClassicRunContext> {
   const projectRoot = await discoverClassicProject(changeDir);
-  const source = await readClassicProjectFile(projectRoot, path.join(changeDir, '.comet.yaml'), {
-    label: 'Classic migration state',
-  });
+  const source = await readClassicProjectFile(
+    projectRoot,
+    await resolveClassicStateFile(changeDir),
+    {
+      label: 'Classic migration state',
+    },
+  );
   if (hasClassicManagedRunMarker(source)) {
     throw new Error('Classic managed Run is owned by the SDK and cannot be migrated to compat');
   }
@@ -164,17 +170,28 @@ async function ensureClassicRunLocked(
     }
     const installedHash = await hashSkillPackage(options.skillPackage);
     if (installedHash !== projection.run.skillHash) {
-      await readSkillSnapshot(changeDir, projection.run.skillHash);
+      await readSkillSnapshot(
+        await resolveClassicRunDirectory(changeDir),
+        projection.run.skillHash,
+      );
       return {
         classic,
         run: projection.run,
         evidence: await collectClassicEvidence(changeDir, projection),
         migrated: false,
-        snapshotDir: path.join(changeDir, '.comet', 'skill-snapshots', projection.run.skillHash),
+        snapshotDir: path.join(
+          await resolveClassicRunDirectory(changeDir),
+          '.comet',
+          'skill-snapshots',
+          projection.run.skillHash,
+        ),
       };
     }
 
-    const snapshot = await createSkillSnapshot(options.skillPackage, changeDir);
+    const snapshot = await createSkillSnapshot(
+      options.skillPackage,
+      await resolveClassicRunDirectory(changeDir),
+    );
     return {
       classic,
       run: projection.run,
@@ -191,12 +208,20 @@ async function ensureClassicRunLocked(
   }
 
   const expectedHash = await hashSkillPackage(options.skillPackage);
-  const expectedSnapshotDir = path.join(changeDir, '.comet', 'skill-snapshots', expectedHash);
+  const expectedSnapshotDir = path.join(
+    await resolveClassicRunDirectory(changeDir),
+    '.comet',
+    'skill-snapshots',
+    expectedHash,
+  );
   const snapshotExisted = await pathExists(expectedSnapshotDir);
   const createdFiles: string[] = [];
 
   try {
-    const snapshot = await createSkillSnapshot(options.skillPackage, changeDir);
+    const snapshot = await createSkillSnapshot(
+      options.skillPackage,
+      await resolveClassicRunDirectory(changeDir),
+    );
     const run = startRun(options.skillPackage, options.runId?.() ?? randomUUID(), snapshot.hash);
     run.currentStep = step;
     if (step === 'completed') run.status = 'completed';
@@ -220,11 +245,11 @@ async function ensureClassicRunLocked(
         },
       );
       await writeContext(changeDir, run.contextRef, context);
-      createdFiles.push(path.resolve(changeDir, run.contextRef));
+      createdFiles.push(path.resolve(await resolveClassicRunDirectory(changeDir), run.contextRef));
     }
 
     await writeArtifacts(changeDir, run.artifactsRef, artifacts);
-    createdFiles.push(path.resolve(changeDir, run.artifactsRef));
+    createdFiles.push(path.resolve(await resolveClassicRunDirectory(changeDir), run.artifactsRef));
 
     const timestamp = (options.now?.() ?? new Date()).toISOString();
     const checkpoint: Checkpoint = {
@@ -236,9 +261,9 @@ async function ensureClassicRunLocked(
       createdAt: timestamp,
     };
     await writeCheckpoint(changeDir, run.checkpointRef, checkpoint);
-    createdFiles.push(path.resolve(changeDir, run.checkpointRef));
+    createdFiles.push(path.resolve(await resolveClassicRunDirectory(changeDir), run.checkpointRef));
 
-    createdFiles.push(path.resolve(changeDir, run.trajectoryRef));
+    createdFiles.push(path.resolve(await resolveClassicRunDirectory(changeDir), run.trajectoryRef));
     for (const event of migrationEvents(run, profile, timestamp)) {
       await appendTrajectory(changeDir, run.trajectoryRef, event);
     }

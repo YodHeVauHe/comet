@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { spawnSync } from 'child_process';
 import os from 'os';
 import path from 'path';
@@ -293,7 +294,7 @@ describe('Comet entry resume probe v2', () => {
     );
     expect(created.exitCode, created.stderr).toBe(0);
     const store = createFileRuntimeStore<WorkflowRun>({
-      rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+      rootDir: path.join(resolveWorkspaceRuntimeRootSync(projectRoot), 'sdk-runs', 'classic'),
     });
     const run = await store.read('lagging-classic');
     expect(run).not.toBeNull();
@@ -308,7 +309,7 @@ describe('Comet entry resume probe v2', () => {
     expect(advanced?.state).toMatchObject({ phase: 'design' });
     expect(
       await fs.readFile(
-        path.join(projectRoot, 'openspec', 'changes', 'lagging-classic', '.comet.yaml'),
+        path.join(projectRoot, 'openspec', 'changes', 'lagging-classic', 'comet-state.yaml'),
         'utf8',
       ),
     ).toContain('phase: open');
@@ -847,10 +848,10 @@ describe('Comet entry resume probe v2', () => {
   });
 
   it('does not make a dirty worktree a Native resume blocker', async () => {
-    await writeProjectConfig(projectRoot, defaultProjectConfig('.'));
-    await createNative(projectRoot, 'cache-controls');
     const initialized = spawnSync('git', ['init'], { cwd: projectRoot, encoding: 'utf8' });
     expect(initialized.status, initialized.stderr).toBe(0);
+    await writeProjectConfig(projectRoot, defaultProjectConfig('.'));
+    await createNative(projectRoot, 'cache-controls');
     await writeFile(path.join(projectRoot, 'notes.txt'), 'uncommitted user work\n');
 
     const result = await resolveCometEntryResumeProbe(projectRoot, input('继续 cache-controls'));
@@ -862,6 +863,9 @@ describe('Comet entry resume probe v2', () => {
     });
     expect(result.evidence).toContainEqual(
       expect.objectContaining({ source: 'repo', quote: expect.stringContaining('dirty file') }),
+    );
+    await expect(fs.readFile(path.join(projectRoot, 'notes.txt'), 'utf8')).resolves.toBe(
+      'uncommitted user work\n',
     );
   });
 

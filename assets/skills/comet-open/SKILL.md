@@ -25,7 +25,7 @@ When resuming an existing change, first run `comet state next <name> --json` to 
 
 - `sdk`: reuse the Run and recover according to `data.nextAction.kind`. Investigate a claimed Action with an unknown outcome before recreating or redispatching work.
 - `compat`: reuse the original flow and `.comet.yaml`; never migrate it automatically.
-- If the command fails, inspect its error, ownership record, Run, and `.comet.yaml`. Stop on conflict or malformed state. If local Run history is missing, first check `run_checkpoint` in the state file and follow `/comet-classic`'s recovery steps to resume the saved phase. Only an older state without a checkpoint may return to Open after the user explicitly consents to restoration and fresh evidence and approvals. Prepare and initialize a workspace only when no Runtime owns a valid change directory. Missing `.comet.yaml` alone is not evidence.
+- If the command fails, inspect its error, ownership record, Run, and actual state file. Stop on conflict or malformed state. If local Run history is missing, first check `run_checkpoint` in the state file and follow `/comet-classic`'s recovery steps to resume the saved phase. Only an older state without a checkpoint may return to Open after the user explicitly consents to restoration and fresh evidence and approvals. Prepare and initialize a workspace only when no Runtime owns a valid change directory. A missing filename alone is not evidence that initialization is needed.
 
 Bind the workspace for both SDK and compat changes:
 
@@ -223,7 +223,7 @@ Confirm these artifacts exist:
 └── tasks.md          # Task checklist
 ```
 
-The SDK Run is stored under project `.comet/runtime/sdk-runs/classic/`; the change directory still retains `.comet.yaml`. Recover through `state next` and `state check`; do not edit Run storage directly.
+The SDK Run is stored in the user-level workspace Runtime directory. New changes save `comet-state.yaml`; historical `.comet.yaml` files remain in place. Recover through `state next` and `state check`; do not edit Run storage directly.
 
 ### 3. Validate entry state
 
@@ -237,7 +237,7 @@ Continue to Step 4 when it passes. On failure, the script reports the specific c
 
 **Resume unfinished creation steps:** Open operations can be safely retried. On recovery, process the status in this order, retaining completed work:
 
-1. First run `comet state next <name> --json` to identify ownership. Reuse an SDK Run; retain the original flow for `runtimeFormat: compat`. Only when there is no Run, ownership record, or `.comet.yaml` may you prepare the workspace and run `comet state init <name> full --isolation <selected-isolation>`. Stop on malformed state or ownership conflicts. Then select and run `comet state check <name> open`.
+1. First run `comet state next <name> --json` to identify ownership. Reuse an SDK Run; retain the original flow for `runtimeFormat: compat`. Only when there is no Run, ownership record, or state file under either name may you prepare the workspace and run `comet state init <name> full --isolation <selected-isolation>`. Stop on malformed state or ownership conflicts. Then select and run `comet state check <name> open`.
 2. Run `comet classic openspec --agent-json -- status --change "<name>" --json` and recheck `changeRoot`, core IDs, `applyRequires`, `artifacts`, and `missingDeps`.
 3. `done`: keep the artifact unchanged and do not regenerate it.
 4. `ready`: fetch its instructions with `comet classic openspec --agent-json -- instructions <artifact-id> --change "<name>" --json`, write the artifact accordingly, then validate the closure locally with `comet state artifacts <name> --json` instead of refreshing status.

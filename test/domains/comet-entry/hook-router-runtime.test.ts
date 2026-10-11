@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRoot } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
@@ -72,6 +73,118 @@ describe('packaged Hook Router worktree isolation', () => {
     await writeNativeChange(paths, change);
     await selectNativeChange(paths, name);
   }
+
+  it('blocks direct Runtime writes through the installed Router with no selected change', async () => {
+    const runtimeRoot = await resolveWorkspaceRuntimeRoot(primary);
+    for (const ref of [
+      'native/changes/example/state.json',
+      'sdk-runs/classic/run.json',
+      'applications/custom/run.json',
+    ]) {
+      const result = spawnSync(
+        process.execPath,
+        [router, '--platform', 'codex', '--project-root', primary],
+        {
+          cwd: primary,
+          input: JSON.stringify({
+            tool_name: 'Write',
+            cwd: primary,
+            tool_input: { file_path: path.join(runtimeRoot, ref) },
+          }),
+          encoding: 'utf8',
+          timeout: 20_000,
+        },
+      );
+      expect(result.status, result.stderr).toBe(2);
+      expect(result.stderr).toContain('Runtime-owned');
+    }
+    const linkedRoot = await resolveWorkspaceRuntimeRoot(secondary);
+    const linked = spawnSync(
+      process.execPath,
+      [router, '--platform', 'codex', '--project-root', primary],
+      {
+        cwd: primary,
+        input: JSON.stringify({
+          tool_name: 'Write',
+          cwd: secondary,
+          tool_input: { file_path: path.join(linkedRoot, 'native/state.json') },
+        }),
+        encoding: 'utf8',
+        timeout: 20_000,
+      },
+    );
+    expect(linked.status, linked.stderr).toBe(2);
+    expect(linked.stderr).toContain('Runtime-owned');
+  });
+
+  it.each([
+    ['primary', 'runtime'],
+    ['primary', 'project-subdirectory'],
+    ['linked', 'runtime'],
+    ['linked', 'project-subdirectory'],
+  ])(
+    'blocks relative Runtime writes from the %s %s cwd without selection',
+    async (owner, cwdKind) => {
+      const projectRoot = owner === 'primary' ? primary : secondary;
+      const runtimeRoot = await resolveWorkspaceRuntimeRoot(projectRoot);
+      const cwd = cwdKind === 'runtime' ? runtimeRoot : path.join(projectRoot, 'nested');
+      await fs.mkdir(cwd, { recursive: true });
+      const result = spawnSync(
+        process.execPath,
+        [router, '--platform', 'codex', '--project-root', primary],
+        {
+          cwd: primary,
+          input: JSON.stringify({
+            tool_name: 'Write',
+            cwd,
+            tool_input: {
+              file_path: path.relative(
+                cwd,
+                path.join(runtimeRoot, 'native/changes/example/checkpoint.json'),
+              ),
+            },
+          }),
+          encoding: 'utf8',
+          timeout: 20_000,
+        },
+      );
+      expect(result.status, result.stderr).toBe(2);
+      expect(result.stderr).toContain('Runtime-owned');
+    },
+  );
+
+  it('keeps the explicit relative base when Runtime belongs to a nested linked worktree', async () => {
+    const nestedSecondary = path.join(primary, 'nested', 'worktree');
+    await fs.mkdir(path.dirname(nestedSecondary), { recursive: true });
+    const moved = spawnSync(
+      'git',
+      ['-C', primary, 'worktree', 'move', secondary, nestedSecondary],
+      {
+        encoding: 'utf8',
+        timeout: 20_000,
+      },
+    );
+    expect(moved.status, moved.stderr).toBe(0);
+    secondary = nestedSecondary;
+    const runtimeRoot = await resolveWorkspaceRuntimeRoot(secondary);
+    const result = spawnSync(
+      process.execPath,
+      [router, '--platform', 'codex', '--project-root', primary],
+      {
+        cwd: primary,
+        input: JSON.stringify({
+          tool_name: 'Write',
+          tool_input: {
+            file_path: path.relative(primary, path.join(runtimeRoot, 'native/checkpoint.json')),
+          },
+        }),
+        encoding: 'utf8',
+        timeout: 20_000,
+      },
+    );
+    expect(result.status, result.stderr).toBe(2);
+    expect(result.stderr).toContain('Runtime-owned');
+  });
 
   it('uses the linked worktree state even when the installed command still names the primary root', async () => {
     await configureChange(primary, 'primary-shape', 'shape');

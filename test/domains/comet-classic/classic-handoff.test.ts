@@ -1,3 +1,4 @@
+import { resolveClassicRunDirectory } from '../../../domains/comet-classic/classic-runtime-paths.js';
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { existsSync, promises as fs } from 'fs';
@@ -128,14 +129,23 @@ describe('Classic handoff command', () => {
       string,
       unknown
     >;
-    const runState = await readRunState(changeDir);
+    const runState = await readRunState(await resolveClassicRunDirectory(changeDir));
     expect(runState).not.toBeNull();
-    const context = await fs.readFile(path.join(changeDir, runState!.contextRef), 'utf8');
+    const context = await fs.readFile(
+      path.join(await resolveClassicRunDirectory(changeDir), runState!.contextRef),
+      'utf8',
+    );
     const artifacts = JSON.parse(
-      await fs.readFile(path.join(changeDir, runState!.artifactsRef), 'utf8'),
+      await fs.readFile(
+        path.join(await resolveClassicRunDirectory(changeDir), runState!.artifactsRef),
+        'utf8',
+      ),
     ) as Record<string, string>;
     const checkpoint = JSON.parse(
-      await fs.readFile(path.join(changeDir, runState!.checkpointRef), 'utf8'),
+      await fs.readFile(
+        path.join(await resolveClassicRunDirectory(changeDir), runState!.checkpointRef),
+        'utf8',
+      ),
     ) as Record<string, unknown>;
     expect(context).toBe(md);
     expect(artifacts).toMatchObject({
@@ -150,7 +160,9 @@ describe('Classic handoff command', () => {
     expect(runState!.currentStep).toBe('full.design.document');
     expect(runState!.iteration).toBe(1);
     expect(runState!.pending).toBeNull();
-    await expect(fs.access(path.join(changeDir, runState!.pendingRef))).rejects.toMatchObject({
+    await expect(
+      fs.access(path.join(await resolveClassicRunDirectory(changeDir), runState!.pendingRef)),
+    ).rejects.toMatchObject({
       code: 'ENOENT',
     });
   });
@@ -382,7 +394,7 @@ describe('Classic handoff command', () => {
     const guard = run(dir, 'guard', 'demo', 'design', '--apply');
     expect(guard.status, guard.stderr).toBe(0);
     expect(run(dir, 'state', 'get', 'demo', 'phase').stdout.trim()).toBe('build');
-    const runStateBefore = await readRunState(changeDir);
+    const runStateBefore = await readRunState(await resolveClassicRunDirectory(changeDir));
     expect(runStateBefore).not.toBeNull();
     expect(runStateBefore!.currentStep).toBe('full.build.configure');
 
@@ -397,7 +409,7 @@ describe('Classic handoff command', () => {
 
     // The refresh must not move the workflow phase or the Runtime currentStep.
     expect(run(dir, 'state', 'get', 'demo', 'phase').stdout.trim()).toBe('build');
-    const runStateAfter = await readRunState(changeDir);
+    const runStateAfter = await readRunState(await resolveClassicRunDirectory(changeDir));
     expect(runStateAfter).not.toBeNull();
     expect(runStateAfter!.currentStep).toBe('full.build.configure');
   });
@@ -407,11 +419,11 @@ describe('Classic handoff command', () => {
     const changeDir = await seedDesignChange(dir);
     expect(run(dir, 'handoff', 'demo', 'design', '--write').status).toBe(0);
     const hash = run(dir, 'state', 'get', 'demo', 'handoff_hash').stdout.trim();
-    const runStateBefore = await readRunState(changeDir);
+    const runStateBefore = await readRunState(await resolveClassicRunDirectory(changeDir));
     expect(runStateBefore).not.toBeNull();
     const actionId = `classic-handoff:${hash}`;
     await fs.writeFile(
-      path.join(changeDir, runStateBefore!.pendingRef),
+      path.join(await resolveClassicRunDirectory(changeDir), runStateBefore!.pendingRef),
       JSON.stringify({
         id: actionId,
         stepId: runStateBefore!.currentStep,
@@ -419,15 +431,21 @@ describe('Classic handoff command', () => {
         ref: hash,
       }),
     );
-    await writeRunState(changeDir, { ...runStateBefore!, pending: actionId });
+    await writeRunState(await resolveClassicRunDirectory(changeDir), {
+      ...runStateBefore!,
+      pending: actionId,
+    });
 
     const result = run(dir, 'handoff', 'demo', 'design', '--write');
     expect(result.status).toBe(0);
-    const afterRunState = await readRunState(changeDir);
+    const afterRunState = await readRunState(await resolveClassicRunDirectory(changeDir));
     expect(afterRunState).not.toBeNull();
     expect(afterRunState!.pending).toBeNull();
     const trajectory = (
-      await fs.readFile(path.join(changeDir, afterRunState!.trajectoryRef), 'utf8')
+      await fs.readFile(
+        path.join(await resolveClassicRunDirectory(changeDir), afterRunState!.trajectoryRef),
+        'utf8',
+      )
     )
       .trim()
       .split(/\r?\n/u)

@@ -91,7 +91,7 @@ export function classicCommandHelp(command: string, args: readonly string[]): st
       'Start with current or next <change-name> to inspect workflow guidance.',
       'Advanced writes: init, set, transition, task-checkoff, select, rebind, clear-selection.',
       'Use comet state <command> --help for details. --recover is for cold recovery, not normal progression.',
-      'A copied SDK change with a Run checkpoint in .comet.yaml resumes at its saved phase. If the checkpoint is absent, state restore requires confirmation and restarts at Open with fresh approvals and checks.',
+      'A copied SDK change with a Run checkpoint in comet-state.yaml (or legacy .comet.yaml) resumes at its saved phase. If the checkpoint is absent, state restore requires confirmation and restarts at Open with fresh approvals and checks.',
       'For SDK Design, propose-design records the exact proposal before asking the user; decide-design accepts only its current hash and may return a rejected proposal to Design. complete-design requires the approved hash and records the Design Doc in the same Run.',
       'For SDK Build, propose-build reads build_mode, tdd_mode, review_mode and subagent_dispatch from a project-relative JSON file; optional direct_override is required for full direct execution. Workspace isolation remains the Open decision.',
       'decide-build resolves only the current proposal. Rejecting it returns to configuration; approving it stores the choices and advances to planning.',
@@ -279,7 +279,7 @@ export function classicCommandHelp(command: string, args: readonly string[]): st
     ],
     restore: [
       'comet state restore <change-name> --confirmed',
-      'Only for a copied SDK change whose .comet.yaml survived but local Run history did not.',
+      'Only for a copied SDK change whose state file survived but local Run history did not.',
       'Confirm the original execution process stopped before using this command. A portable checkpoint restores the saved phase and decisions; an older state without one restarts at Open and requires fresh evidence and approvals.',
       'Unknown external actions are not replayed. A branch binding mismatch or archived change is rejected.',
     ],

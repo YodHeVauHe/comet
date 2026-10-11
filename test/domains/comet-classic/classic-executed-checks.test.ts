@@ -1,10 +1,17 @@
-import { spawnSync } from 'node:child_process';
+import {
+  resolveClassicRunDirectory,
+  resolveClassicLocalTarget,
+} from '../../../domains/comet-classic/classic-runtime-paths.js';
+import { execFile, spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as checkSnapshot from '../../../domains/comet-classic/classic-check-snapshot.js';
-import { runClassicCli } from '../../../domains/comet-classic/classic-cli.js';
+import {
+  runClassicCli,
+  type ClassicCommandResult,
+} from '../../../domains/comet-classic/classic-cli.js';
 import { withClassicCommandContext } from '../../../domains/comet-classic/classic-command-context.js';
 import { prepareClassicLegacyProject } from '../../helpers/classic-project.js';
 import {
@@ -12,7 +19,7 @@ import {
   recoverCommandChecks,
 } from '../../../domains/comet-classic/classic-command-checks.js';
 import { ensureClassicRuntimeRun } from '../../../domains/comet-classic/classic-runtime-run.js';
-import { readTrajectory } from '../../../domains/engine/run-store.js';
+import { readTrajectory } from '../../../domains/comet-classic/classic-run-store.js';
 
 describe('Classic executed check evidence', () => {
   let root: string;
@@ -20,6 +27,27 @@ describe('Classic executed check evidence', () => {
     withClassicCommandContext({ projectRoot: root, invocationCwd: root }, () =>
       runClassicCli(args),
     );
+  const generatedCli = (...args: string[]) =>
+    new Promise<ClassicCommandResult>((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [path.resolve('assets/skills/comet/scripts/comet-runtime.mjs'), ...args, '--json'],
+        { cwd: root, encoding: 'utf8', timeout: 60_000, maxBuffer: 2 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (error && (typeof error.code !== 'number' || error.killed || error.signal)) {
+            reject(error);
+            return;
+          }
+          try {
+            const result = JSON.parse(stdout) as ClassicCommandResult;
+            expect(result.exitCode, stdout + stderr).toBe(error?.code ?? 0);
+            resolve(result);
+          } catch (failure) {
+            reject(failure);
+          }
+        },
+      );
+    });
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'classic-executed-'));
@@ -89,9 +117,12 @@ describe('Classic executed check evidence', () => {
     expect(result.exitCode, result.stderr).toBe(0);
     const data = JSON.parse(result.stdout!).data;
     expect(data).toMatchObject({ provenance: 'runtime', exitCode: 0, reusable: true });
-    expect(await fs.readFile(path.join(root, data.logRef), 'utf8')).toContain(
-      '["--json","--help","a & b"]',
-    );
+    expect(
+      await fs.readFile(
+        (await resolveClassicLocalTarget(root, path.join(root, data.logRef)))!.target,
+        'utf8',
+      ),
+    ).toContain('["--json","--help","a & b"]');
   });
 
   it('persists a bound SDK Action across check start and completion', async () => {
@@ -149,7 +180,10 @@ describe('Classic executed check evidence', () => {
     expect(result.exitCode, result.stderr).toBe(0);
     const changeDir = path.join(root, 'openspec', 'changes', 'demo');
     const { run } = await ensureClassicRuntimeRun(changeDir);
-    const trajectoryFile = path.join(changeDir, run.trajectoryRef);
+    const trajectoryFile = path.join(
+      await resolveClassicRunDirectory(changeDir),
+      run.trajectoryRef,
+    );
     const events = (await fs.readFile(trajectoryFile, 'utf8'))
       .trimEnd()
       .split('\n')
@@ -172,7 +206,10 @@ describe('Classic executed check evidence', () => {
     }
     const changeDir = path.join(root, 'openspec', 'changes', 'demo');
     const { run } = await ensureClassicRuntimeRun(changeDir);
-    const trajectoryFile = path.join(changeDir, run.trajectoryRef);
+    const trajectoryFile = path.join(
+      await resolveClassicRunDirectory(changeDir),
+      run.trajectoryRef,
+    );
     const events = (await fs.readFile(trajectoryFile, 'utf8'))
       .trimEnd()
       .split('\n')
@@ -201,7 +238,10 @@ describe('Classic executed check evidence', () => {
     expect(result.exitCode, result.stderr).toBe(0);
     const changeDir = path.join(root, 'openspec', 'changes', 'demo');
     const { run } = await ensureClassicRuntimeRun(changeDir);
-    const trajectoryFile = path.join(changeDir, run.trajectoryRef);
+    const trajectoryFile = path.join(
+      await resolveClassicRunDirectory(changeDir),
+      run.trajectoryRef,
+    );
     const events = (await fs.readFile(trajectoryFile, 'utf8'))
       .trimEnd()
       .split('\n')
@@ -265,9 +305,12 @@ describe('Classic executed check evidence', () => {
       );
       expect(result.status, result.stderr).toBe(0);
       const evidence = JSON.parse(result.stdout).data;
-      expect(await fs.readFile(path.join(root, evidence.logRef), 'utf8')).toContain(
-        '--json|--help|--comet-task|literal',
-      );
+      expect(
+        await fs.readFile(
+          (await resolveClassicLocalTarget(root, path.join(root, evidence.logRef)))!.target,
+          'utf8',
+        ),
+      ).toContain('--json|--help|--comet-task|literal');
     },
   );
 
@@ -343,7 +386,12 @@ describe('Classic executed check evidence', () => {
       'check.cjs',
     );
     expect(fresh.exitCode, fresh.stderr).toBe(0);
-    await fs.unlink(path.join(root, JSON.parse(fresh.stdout!).data.logRef));
+    await fs.unlink(
+      (await resolveClassicLocalTarget(
+        root,
+        path.join(root, JSON.parse(fresh.stdout!).data.logRef),
+      ))!.target,
+    );
     expect((await cli('guard', 'demo', 'verify')).exitCode).not.toBe(0);
   });
 
@@ -789,7 +837,13 @@ describe('Classic executed check evidence', () => {
       expect(result.exitCode).toBe(0);
       if (reason === 'changed-input') await fs.writeFile(path.join(root, 'input.txt'), 'bad');
       if (reason === 'damaged-log') {
-        await fs.writeFile(path.join(root, JSON.parse(result.stdout!).data.logRef), 'tampered');
+        await fs.writeFile(
+          (await resolveClassicLocalTarget(
+            root,
+            path.join(root, JSON.parse(result.stdout!).data.logRef),
+          ))!.target,
+          'tampered',
+        );
       }
       const recovered = await cli('state', 'check', 'demo', 'verify', '--recover', '--json');
       expect(JSON.parse(recovered.stdout!).data.evidence.scopes.verify).toBe('rerun-required');
@@ -908,16 +962,35 @@ describe('Classic executed check evidence', () => {
     expect((await cli('guard', 'demo', 'verify')).exitCode).not.toBe(0);
   });
 
-  it('allows only one of two concurrent guarded phase transitions to succeed', async () => {
-    await readyVerify();
-    await cli('check', 'run', 'demo', 'verify', '--', process.execPath, 'check.cjs');
-    const results = await Promise.all([
-      cli('guard', 'demo', 'verify', '--apply'),
-      cli('guard', 'demo', 'verify', '--apply'),
-    ]);
-    expect(results.filter((result) => result.exitCode === 0)).toHaveLength(1);
-    expect((await cli('state', 'get', 'demo', 'check_epoch')).stdout?.trim()).toBe('1');
-  });
+  it.each(['source', 'generated'] as const)(
+    'allows only one of two concurrent guarded phase transitions to succeed via %s',
+    async (mode) => {
+      await readyVerify();
+      const check = await cli(
+        'check',
+        'run',
+        'demo',
+        'verify',
+        '--',
+        process.execPath,
+        'check.cjs',
+      );
+      expect(check.exitCode, check.stderr).toBe(0);
+      const guard = mode === 'generated' ? generatedCli : cli;
+      const results = await Promise.all([
+        guard('guard', 'demo', 'verify', '--apply'),
+        guard('guard', 'demo', 'verify', '--apply'),
+      ]);
+      const winners = results.filter((result) => result.exitCode === 0);
+      expect(winners, JSON.stringify(results)).toHaveLength(1);
+      expect(winners[0].data).toMatchObject({
+        phase: 'archive',
+        configuration: { phase: 'archive' },
+      });
+      expect((await cli('state', 'get', 'demo', 'phase')).stdout?.trim()).toBe('archive');
+      expect((await cli('state', 'get', 'demo', 'check_epoch')).stdout?.trim()).toBe('1');
+    },
+  );
 
   it('preserves non-local evidence if a different guard prerequisite fails', async () => {
     await readyVerify();
@@ -1024,7 +1097,10 @@ describe('Classic executed check evidence', () => {
     );
     expect(check.exitCode).not.toBe(0);
     const { run } = await ensureClassicRuntimeRun(changeDir);
-    const trajectoryFile = path.join(changeDir, run.trajectoryRef);
+    const trajectoryFile = path.join(
+      await resolveClassicRunDirectory(changeDir),
+      run.trajectoryRef,
+    );
     const events = (await fs.readFile(trajectoryFile, 'utf8'))
       .trimEnd()
       .split('\n')

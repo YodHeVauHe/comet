@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -100,7 +101,7 @@ describe('packaged Runtime issue regressions', () => {
     ).toBe(65);
     expect(invoke(['show', name]).data.state).toEqual(before);
     const rejectedInput = path.join(root, `input-${sequence}.json`);
-    const counter = path.join(root, '.comet/runtime/count.txt');
+    const counter = path.join(resolveWorkspaceRuntimeRootSync(root), 'count.txt');
     const plan = {
       id: 'fixture',
       name: 'Fixture',

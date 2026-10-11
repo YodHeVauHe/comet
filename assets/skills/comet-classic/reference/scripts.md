@@ -50,7 +50,7 @@ guard `--apply` updates state after checks pass. Use `comet state transition` wh
 
 ## Automatic State Updates
 
-guard accepts `--apply` to update `.comet.yaml` automatically after validation:
+guard accepts `--apply` to update the actual state file automatically after validation:
 
 ```bash
 comet guard <change-name> <phase> --apply
@@ -131,9 +131,9 @@ comet archive <change-name>
 
 ## Task Context and Artifact Language
 
-Every OpenSpec and Superpowers artifact must use the configured Comet artifact language, a normalized language ID: `en` or `zh-CN`. For an existing change, prefer `configuration.language` from the current valid entry. Only if entry omits it, read `language` in `<classic-change-dir>/.comet.yaml` through `comet state get <name> language`. Before `.comet.yaml` exists, read `classic.language` from project `.comet/config.yaml`, then global `~/.comet/config.yaml`. Use the current user request's language only when neither is configured. Explicitly include the resolved language in prompts or ARGUMENTS sent to external OpenSpec/Superpowers Skills.
+Every OpenSpec and Superpowers artifact must use the configured Comet artifact language, a normalized language ID: `en` or `zh-CN`. For an existing change, prefer `configuration.language` from the current valid entry. Only if entry omits it, read `language` in the actual state file through `comet state get <name> language`. When neither state filename exists, read `classic.language` from project `.comet/config.yaml`, then global `~/.comet/config.yaml`. Use the current user request's language only when neither is configured. Explicitly include the resolved language in prompts or ARGUMENTS sent to external OpenSpec/Superpowers Skills.
 
-After binding the Classic workspace and reading the current `.comet.yaml` `phase`, automatically run `comet task <project-root> --task "<original user request>" --phase "<phase>" --session "<stable task id>" --json`. Add only returned `text` to context. Context Manifest (`manifest` / `<context_manifest>`) contains summaries, selection reasons, and stable IDs. When full content, sources, or verification methods are needed, run the same command with `--expand-context "<id>"`. When paths, operations, or phase change, reuse the same `--session` and pass updated `--path`, `--operation`, and `--phase` to select applicable context again.
+After binding the Classic workspace and reading the current `phase` from the actual state file, automatically run `comet task <project-root> --task "<original user request>" --phase "<phase>" --session "<stable task id>" --json`. Add only returned `text` to context. Context Manifest (`manifest` / `<context_manifest>`) contains summaries, selection reasons, and stable IDs. When full content, sources, or verification methods are needed, run the same command with `--expand-context "<id>"`. When paths, operations, or phase change, reuse the same `--session` and pass updated `--path`, `--operation`, and `--phase` to select applicable context again.
 
 If `<active_policies>` includes `<verification command="...">`, add those commands to current Verify checks and record their actual results. Only commands that have actually passed can promote the corresponding policy to enforced.
 

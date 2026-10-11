@@ -4,6 +4,7 @@ import { classicProjectTargetExists, readClassicProjectFile } from './classic-pr
 import { classicSdkCheckCommand } from './classic-sdk-check.js';
 import {
   classicSdkCheckRecordRef,
+  classicSdkCheckDirectoryRef,
   assertClassicSdkCheckReceipt,
 } from './classic-sdk-check-record.js';
 
@@ -13,7 +14,7 @@ export async function inspectClassicSdkActionRecovery(projectRoot: string, run: 
   if (!action) return null;
   const isCheck = action.type === 'call_tool' && action.ref === 'classic-check';
   const input = run.input as { changeDir?: string } | null;
-  const evidenceDirectory = input?.changeDir ? `${input.changeDir}/.comet/checks` : null;
+  const evidenceDirectory = input?.changeDir ? classicSdkCheckDirectoryRef(run) : null;
   const recordRef = isCheck && action.claim ? classicSdkCheckRecordRef(run, action) : null;
   let record: Record<string, unknown> | null = null;
   let recordProblem: string | null = null;

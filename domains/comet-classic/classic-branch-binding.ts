@@ -1,3 +1,4 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
 import { measureCometGitCommand } from '../../platform/process/runtime-metrics.js';
 import { execFileSync } from 'child_process';
 import { promises as fs } from 'fs';
@@ -125,7 +126,7 @@ async function resolveBranchBindingLocked(
   changeDir: string,
   options: { heal: boolean; cwd: string },
 ): Promise<BranchBindingOutcome> {
-  const file = path.join(changeDir, '.comet.yaml');
+  const file = await resolveClassicStateFile(changeDir);
   const document = parseDocument(await fs.readFile(file, 'utf8'), { uniqueKeys: false });
   if (document.errors.length > 0) {
     throw new Error(`Invalid .comet.yaml: ${document.errors[0].message}`);
@@ -155,9 +156,9 @@ export async function healBoundBranch(changeDir: string, branch: string): Promis
 }
 
 async function healBoundBranchLocked(changeDir: string, branch: string): Promise<void> {
-  const file = path.join(changeDir, '.comet.yaml');
+  const file = await resolveClassicStateFile(changeDir);
   const source = (
-    await readProtectedProjectFile(changeDir, '.comet.yaml', CLASSIC_PROJECT_FILE_MAX_BYTES, {
+    await readProtectedProjectFile(changeDir, path.basename(file), CLASSIC_PROJECT_FILE_MAX_BYTES, {
       label: 'Classic branch binding',
     })
   ).bytes.toString('utf8');

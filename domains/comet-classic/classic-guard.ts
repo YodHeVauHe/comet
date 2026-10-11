@@ -1,3 +1,4 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
 import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
 import { inspectClassicAutonomousBuildProblems } from './classic-plan-readiness.js';
@@ -190,7 +191,7 @@ async function resolveChangeDir(name: string): Promise<string> {
 }
 
 async function readField(changeDir: string, field: string): Promise<string> {
-  const file = path.join(changeDir, '.comet.yaml');
+  const file = await resolveClassicStateFile(changeDir);
   const document = parseDocument(
     await readClassicProjectFile(classicCommandProjectRoot(), file, {
       label: `Classic state ${changeDir}/.comet.yaml`,
@@ -269,7 +270,7 @@ async function preflight(changeDir: string, name: string): Promise<void> {
   if (!(await exists(changeDir))) {
     throw new GuardFailure(red(`FATAL: change directory not found: ${changeDir}`));
   }
-  if (!(await exists(path.join(changeDir, '.comet.yaml')))) {
+  if (!(await exists(await resolveClassicStateFile(changeDir)))) {
     throw new GuardFailure(red(`FATAL: .comet.yaml not found in ${changeDir}`));
   }
   await inspectClassicProjectTarget(classicCommandProjectRoot(), path.join(changeDir, '.comet'), {
@@ -1608,8 +1609,12 @@ export const classicGuardCommand: ClassicCommandHandler = withProjectContext(
         );
       } else if (flag === '--apply') {
         output.stderr.push(green('ALL CHECKS PASSED — ready for next phase'));
-        await applyStateUpdate(output, change, changeDir, phase);
-        const updated = await readClassicState(changeDir, { migrate: false });
+        // Capture the committed projection before releasing the lock so a later
+        // writer cannot make this successful transition look like a read failure.
+        const updated = await withClassicStateLock(changeDir, async () => {
+          await applyStateUpdate(output, change, changeDir, phase);
+          return readClassicState(changeDir, { migrate: false });
+        });
         if (updated.classic)
           output.data = {
             ...(await classicRecoveryContext(

@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { statusCommand } from '../../app/commands/status.js';
 import { ensureClassicRuntimeRun } from '../../domains/comet-classic/classic-runtime-run.js';
+import { resolveClassicRunDirectory } from '../../domains/comet-classic/classic-runtime-paths.js';
 import { createNativeChange } from '../../domains/comet-native/native-change.js';
 import {
   defaultProjectConfig,
@@ -470,7 +471,11 @@ describe('status command', () => {
         );
         await fs.writeFile(yamlPath, yaml);
       } else {
-        const runPath = path.join(changeDir, '.comet', 'run-state.json');
+        const runPath = path.join(
+          await resolveClassicRunDirectory(changeDir),
+          '.comet',
+          'run-state.json',
+        );
         const run = JSON.parse(await fs.readFile(runPath, 'utf8'));
         run.skill = 'not-comet-classic';
         await fs.writeFile(runPath, `${JSON.stringify(run, null, 2)}\n`);
@@ -540,9 +545,11 @@ describe('status command', () => {
     }
 
     expect(output).toContain('error: Invalid Classic state: unknown field(s): unknown_root_field');
-    expect(output).toContain('next: inspect .comet.yaml and rerun comet doctor');
+    expect(output).toContain('next: inspect the Classic state file and rerun comet doctor');
     expect(output).toContain('runtime-eval-fail [Comet] [phase: open]');
-    expect(output.match(/next: inspect \.comet\.yaml and rerun comet doctor/g)).toHaveLength(1);
+    expect(
+      output.match(/next: inspect the Classic state file and rerun comet doctor/g),
+    ).toHaveLength(1);
   });
 
   it('prints actionable runtime-eval recovery guidance for valid changes', async () => {

@@ -1,4 +1,10 @@
+import { resolveClassicStateFile } from './classic-state-file.js';
+import {
+  resolveWorkspaceRuntimeRoot,
+  resolveWorkspaceRuntimeRootSync,
+} from '../workflow-contract/workspace-runtime.js';
 import { promises as fs } from 'node:fs';
+import { protectClassicLegacyStateWriter } from './classic-runtime-paths.js';
 import type { ApplicationIdentity } from '../workflow-application/index.js';
 import { hashRuntimeValue } from '../engine/runtime.js';
 import { assertClassicSdkCheckReceipt } from './classic-sdk-check-record.js';
@@ -27,7 +33,7 @@ import {
   readProtectedProjectFile,
 } from '../workflow-contract/protected-project-path.js';
 import { readClassicProjectFile, writeClassicProjectText } from './classic-protected-path.js';
-import { assertOpenSpecChangeName } from './classic-paths.js';
+import { inspectClassicStateFileCandidates } from './classic-paths.js';
 import {
   classicStateToDocument,
   CLASSIC_MANAGED_RUN_MARKER,
@@ -51,12 +57,12 @@ const USER_CONFIG_FIELDS = new Set<keyof ClassicState>([
 export { CLASSIC_MANAGED_RUN_MARKER, hasClassicManagedRunMarker } from './classic-state.js';
 
 /** Read the unprojected local record when repairing an interrupted Run creation. */
-export function readClassicSdkRunRecord(
+export async function readClassicSdkRunRecord(
   projectRoot: string,
   runId: string,
 ): Promise<WorkflowRun | null> {
   return createFileRuntimeStore<WorkflowRun>({
-    rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+    rootDir: path.join(await resolveWorkspaceRuntimeRoot(projectRoot), 'sdk-runs', 'classic'),
   }).read(runId);
 }
 
@@ -85,26 +91,6 @@ function archiveMoveIsUnresolved(run: WorkflowRun): boolean {
   );
 }
 
-async function stateFileCandidates(projectRoot: string, runId: string): Promise<string[]> {
-  assertOpenSpecChangeName(runId);
-  const files: string[] = [];
-  for (const rootRef of ['openspec/changes', 'docs/openspec/changes']) {
-    files.push(path.join(projectRoot, rootRef, runId, '.comet.yaml'));
-    const archiveRef = `${rootRef}/archive`;
-    const archive = await inspectProtectedProjectPath(projectRoot, archiveRef, {
-      label: 'Classic SDK Archive directory',
-      expected: 'directory',
-    });
-    if (!archive.exists) continue;
-    for (const entry of await fs.readdir(archive.target)) {
-      if (/^\d{4}-\d{2}-\d{2}-/u.test(entry) && entry.slice(11) === runId) {
-        files.push(path.join(archive.target, entry, '.comet.yaml'));
-      }
-    }
-  }
-  return files;
-}
-
 /** Keep Classic's user-editable YAML at its established path while the SDK owns transitions. */
 export function createClassicSdkStateStore(
   projectRoot: string,
@@ -114,12 +100,27 @@ export function createClassicSdkStateStore(
     readOnly?: boolean;
   } = {},
 ): RuntimeStore<WorkflowRun> {
+  const initialRuntimeRoot = resolveWorkspaceRuntimeRootSync(projectRoot);
+  const boundRuntimeRoot = async () => {
+    const stale = () =>
+      new Error('Classic workspace identity changed; recreate the Runtime store before continuing');
+    if (resolveWorkspaceRuntimeRootSync(projectRoot) !== initialRuntimeRoot) throw stale();
+    const current = options.readOnly
+      ? initialRuntimeRoot
+      : await resolveWorkspaceRuntimeRoot(projectRoot);
+    if (
+      current !== initialRuntimeRoot ||
+      resolveWorkspaceRuntimeRootSync(projectRoot) !== initialRuntimeRoot
+    )
+      throw stale();
+    return current;
+  };
   const store =
     options.store ??
     createFileRuntimeStore<WorkflowRun>({
-      rootDir: path.join(projectRoot, '.comet', 'runtime', 'sdk-runs', 'classic'),
+      rootDir: path.join(initialRuntimeRoot, 'sdk-runs', 'classic'),
     });
-  const projectionDir = '.comet/runtime/state-projections/classic';
+  const projectionDir = 'state-projections/classic';
 
   function recoveryRequired(runId: string, reason: string): never {
     const recovery = options.identity
@@ -136,7 +137,7 @@ export function createClassicSdkStateStore(
     interrupted?: WorkflowRun,
   ): Promise<WorkflowRun | null> {
     let found: { file: string; source: string } | null = null;
-    for (const file of await stateFileCandidates(projectRoot, runId)) {
+    for (const file of await inspectClassicStateFileCandidates(projectRoot, runId)) {
       let source: string;
       try {
         source = await readClassicProjectFile(projectRoot, file, { label: 'Classic state file' });
@@ -172,7 +173,7 @@ export function createClassicSdkStateStore(
     const edits = state ? changedFields(saved.state as unknown as ClassicState, state) : [];
     const expectedActive =
       typeof input?.changeDir === 'string'
-        ? path.join(projectRoot, ...input.changeDir.split('/'), '.comet.yaml')
+        ? await resolveClassicStateFile(path.join(projectRoot, ...input.changeDir.split('/')))
         : null;
     const archivedLocation = expectedActive !== null && found.file !== expectedActive;
     if (
@@ -252,7 +253,7 @@ export function createClassicSdkStateStore(
     }
     const active = path.join(projectRoot, ...relative.split('/'));
     try {
-      if ((await fs.stat(active)).isDirectory()) return path.join(active, '.comet.yaml');
+      if ((await fs.stat(active)).isDirectory()) return resolveClassicStateFile(active);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -272,21 +273,23 @@ export function createClassicSdkStateStore(
       (name) => /^\d{4}-\d{2}-\d{2}-/u.test(name) && name.slice(11) === run.runId,
     );
     if (archives.length !== 1) throw new Error(`Classic SDK Archive ${run.runId} is ambiguous`);
-    return path.join(archive.target, archives[0], '.comet.yaml');
+    return resolveClassicStateFile(path.join(archive.target, archives[0]));
   }
 
   async function syncStateFile(
     runId: string,
     importUserEdits: boolean,
   ): Promise<WorkflowRun | null> {
+    await inspectClassicStateFileCandidates(projectRoot, runId);
+    const runtimeRoot = await boundRuntimeRoot();
     const synchronize = async () => {
-      const markerFile = path.join(projectRoot, projectionDir, `${runId}.json`);
+      const markerFile = path.join(runtimeRoot, projectionDir, `${runId}.json`);
       let marker: ProjectionMarker | null = null;
       let markerSource: string | null = null;
       try {
         markerSource = (
           await readProtectedProjectFile(
-            projectRoot,
+            runtimeRoot,
             `${projectionDir}/${runId}.json`,
             Number.MAX_SAFE_INTEGER,
             { label: 'Classic SDK state projection marker' },
@@ -441,6 +444,7 @@ export function createClassicSdkStateStore(
         }
         return run;
       }
+      await protectClassicLegacyStateWriter(path.dirname(file), projectRoot, runtimeRoot);
       const target = classicStateToDocument(state);
       const current = documentData ?? {};
       for (const [key, value] of Object.entries(target)) {
@@ -470,16 +474,16 @@ export function createClassicSdkStateStore(
       const projectionSource = JSON.stringify(projection) + '\n';
       if (markerSource !== projectionSource) {
         await atomicWriteContainedText(markerFile, projectionSource, {
-          containedRoot: projectRoot,
+          containedRoot: runtimeRoot,
         });
       }
       return run;
     };
     if (options.readOnly) return synchronize();
-    await ensureProtectedProjectDirectory(projectRoot, projectionDir, {
+    await ensureProtectedProjectDirectory(runtimeRoot, projectionDir, {
       label: 'Classic SDK state projection directory',
     });
-    const lockFile = path.join(projectRoot, projectionDir, `${runId}.lock`);
+    const lockFile = path.join(runtimeRoot, projectionDir, `${runId}.lock`);
     return withRecoverableFileLock(lockFile, synchronize, { timeoutMs: 5_000 });
   }
 
@@ -487,6 +491,10 @@ export function createClassicSdkStateStore(
     read: (runId) => syncStateFile(runId, true),
     async compareAndSwap(runId, expectedRevision, next) {
       if (options.readOnly) throw new Error('Classic SDK read-only store cannot change a Run');
+      await inspectClassicStateFileCandidates(projectRoot, runId);
+      // 原始 SDK start 允许省略 input.change；后续投影仍校验完整身份。
+      if (expectedRevision !== null) await stateFile(next);
+      await boundRuntimeRoot();
       const outcomes = next.actions.filter(
         (action) =>
           action.type === 'call_tool' &&

@@ -1,3 +1,4 @@
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
 import { fixtureAcceptanceReview } from '../../helpers/native-builder-acceptance-review.js';
 import { promises as fs } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
@@ -354,12 +355,14 @@ describe('Native parallel linked-worktree Runtime', () => {
     ).resolves.toBe(userSource);
 
     for (const { root } of worktrees) {
-      const locks = path.join(root, '.comet', 'runtime', 'native', 'locks');
+      const locks = path.join(resolveWorkspaceRuntimeRootSync(root), 'native', 'locks');
       const lockEntries = await readDirectoryOrEmpty(locks);
       expect(lockEntries.filter((entry) => entry !== '.coordinator')).toEqual([]);
       expect(await readDirectoryOrEmpty(path.join(locks, '.coordinator'))).toEqual([]);
       expect(
-        await readDirectoryOrEmpty(path.join(root, '.comet', 'runtime', 'native', 'transactions')),
+        await readDirectoryOrEmpty(
+          path.join(resolveWorkspaceRuntimeRootSync(root), 'native', 'transactions'),
+        ),
       ).toEqual([]);
       expect(
         execFileSync('git', ['branch', '--show-current'], { cwd: root, encoding: 'utf8' }).trim(),
