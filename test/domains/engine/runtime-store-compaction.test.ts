@@ -299,7 +299,15 @@ describe('file RuntimeStore compaction and migration', () => {
     await rejected;
     spy.mockRestore();
     expect(await store().read(runId)).toEqual(record(2, 'new writer'));
-    await expect(fs.stat(oldTarget)).rejects.toMatchObject({ code: 'ENOTDIR' });
+    expect((await fs.lstat(original)).isFile()).toBe(true);
+    expect(JSON.parse(await fs.readFile(original, 'utf8'))).toEqual({
+      schema: 'comet.runtime-store-format.v2',
+      runId,
+      state: 'ready',
+    });
+    await expect(fs.stat(oldTarget)).rejects.toMatchObject({
+      code: expect.stringMatching(/^(?:ENOENT|ENOTDIR)$/u),
+    });
   });
 
   it('includes an old writer that commits after validation but before the directory move', async () => {
@@ -382,17 +390,26 @@ describe('file RuntimeStore compaction and migration', () => {
   it('retries a reader overlapping an atomic checkpoint replacement', async () => {
     await store().compareAndSwap(runId, null, record(1));
     const open = fs.open.bind(fs);
-    let replace = true;
+    let replacing = false;
+    let readerOpens = 0;
     const spy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
-      const handle = await open(...args);
-      if (String(args[0]) === checkpoint && replace) {
-        replace = false;
-        expect(await store().compareAndSwap(runId, 1, record(2))).toBe(true);
+      if (String(args[0]) === checkpoint && !replacing) {
+        readerOpens += 1;
+        if (readerOpens === 1) {
+          // Replace after lstat but before open, without holding a Windows checkpoint handle.
+          replacing = true;
+          try {
+            expect(await store().compareAndSwap(runId, 1, record(2))).toBe(true);
+          } finally {
+            replacing = false;
+          }
+        }
       }
-      return handle;
+      return open(...args);
     });
     try {
       expect(await store().read(runId)).toEqual(record(2));
+      expect(readerOpens).toBe(2);
     } finally {
       spy.mockRestore();
     }

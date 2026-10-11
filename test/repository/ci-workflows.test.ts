@@ -209,7 +209,9 @@ describe('CI workflows', () => {
     const classic = steps.find((step) => step.id === 'classic-sdk-tests')!;
     expect(sdk.run).toContain("matrix.os == 'windows-latest'");
     expect(sdk.run).toContain('--exclude test/domains/comet-classic/classic-application.test.ts');
-    expect(classic.if).toBe("matrix.os == 'windows-latest'");
+    expect(classic.if).toBe(
+      "${{ !cancelled() && matrix.os == 'windows-latest' && matrix.shard == 1 && steps.sdk-tests.outcome != 'skipped' }}",
+    );
     expect(classic.run).toContain(
       'vitest run test/domains/comet-classic/classic-application.test.ts',
     );
@@ -226,7 +228,9 @@ describe('CI workflows', () => {
           needs?: string[];
           strategy?: {
             'fail-fast'?: boolean;
-            matrix?: { include?: Array<{ os: string; node: string }> };
+            matrix?: {
+              include?: Array<{ os: string; node: string; shard: number; shards: number }>;
+            };
           };
           steps?: Array<{
             id?: string;
@@ -240,18 +244,27 @@ describe('CI workflows', () => {
     };
     const contracts = ci.jobs['sdk-contracts'];
     expect(contracts?.strategy?.matrix?.include).toEqual([
-      { os: 'ubuntu-latest', node: '22.16.0' },
-      { os: 'ubuntu-latest', node: '24' },
-      { os: 'macos-latest', node: '24' },
-      { os: 'windows-latest', node: '24' },
+      { os: 'ubuntu-latest', node: '22.16.0', shard: 1, shards: 1 },
+      { os: 'ubuntu-latest', node: '24', shard: 1, shards: 1 },
+      { os: 'macos-latest', node: '24', shard: 1, shards: 1 },
+      { os: 'windows-latest', node: '24', shard: 1, shards: 4 },
+      { os: 'windows-latest', node: '24', shard: 2, shards: 4 },
+      { os: 'windows-latest', node: '24', shard: 3, shards: 4 },
+      { os: 'windows-latest', node: '24', shard: 4, shards: 4 },
     ]);
     expect(contracts.strategy?.['fail-fast']).toBe(false);
     const test = contracts.steps?.find((step) => step.id === 'sdk-tests');
     expect(test?.run).toContain('pnpm test:sdk');
+    expect(test?.run).toContain('--shard=${{ matrix.shard }}/${{ matrix.shards }}');
+    expect(test?.run).toContain("matrix.os == 'windows-latest' && '--maxWorkers=1 --exclude");
     expect(test?.run).toContain('--outputFile.json=coverage/sdk/results.json');
     expect(
       contracts.steps?.find((step) => step.uses?.startsWith('actions/upload-artifact@'))?.if,
     ).toContain('always()');
+    expect(
+      contracts.steps?.find((step) => step.uses?.startsWith('actions/upload-artifact@'))?.with
+        ?.name,
+    ).toContain('-shard-${{ matrix.shard }}-of-${{ matrix.shards }}');
     expect(ci.jobs['ci-required'].needs).toEqual(
       expect.arrayContaining(['sdk-contracts', 'sdk-api']),
     );

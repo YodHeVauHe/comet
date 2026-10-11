@@ -290,11 +290,10 @@ describe('file RuntimeStore', () => {
       );
       try {
         const results = workers.map(async (worker) => {
-          const message = once(worker, 'message');
-          const exited = once(worker, 'exit');
+          const completed = Promise.all([workerMessage(worker), once(worker, 'exit')]);
           worker.send('go');
-          const [result] = await message;
-          await exited;
+          const [[result], [code, signal]] = await completed;
+          expect({ code, signal }).toEqual({ code: 0, signal: null });
           return result as { committed: boolean };
         });
         expect((await Promise.all(results)).filter((result) => result.committed)).toHaveLength(1);
@@ -304,6 +303,25 @@ describe('file RuntimeStore', () => {
       }
     },
   );
+
+  it('reports a worker CAS failure after readiness instead of waiting for a missing result', async () => {
+    const rootDir = path.join(root, 'store');
+    const bundle = await bundleStore(root);
+    const original = path.join(
+      rootDir,
+      createHash('sha256').update(JSON.stringify('run-1')).digest('hex'),
+    );
+    await fs.mkdir(original, { recursive: true });
+    await fs.writeFile(path.join(original, '0000000000000001.json'), '{broken');
+    const worker = await startWorker(bundle, rootDir, 'normal', 'failed');
+    try {
+      const completed = Promise.all([workerMessage(worker), once(worker, 'exit')]);
+      worker.send('go');
+      await expect(completed).rejects.toThrow('版本文件不是有效的 UTF-8 JSON 数据');
+    } finally {
+      worker.kill();
+    }
+  });
 
   it.each(['before', 'after'])('recovers a writer killed %s atomic publication', async (mode) => {
     const rootDir = path.join(root, 'store');
@@ -315,7 +333,7 @@ describe('file RuntimeStore', () => {
       state: { message: 'ready' },
     });
     const worker = await startWorker(bundle, rootDir, mode, 'next');
-    const stopped = once(worker, 'message');
+    const stopped = workerMessage(worker);
     worker.send('go');
     await stopped;
     const exited = once(worker, 'exit');
@@ -338,6 +356,42 @@ describe('file RuntimeStore', () => {
       await expect(fs.stat(path.join(runDir, temporary))).resolves.toBeDefined();
   });
 });
+
+const workerDiagnostics = new WeakMap<ChildProcess, { stderr: string }>();
+
+function workerMessage(worker: ChildProcess): Promise<[unknown]> {
+  return new Promise((resolve, reject) => {
+    const failure = (detail: string) => {
+      const stderr = workerDiagnostics.get(worker)?.stderr;
+      return new Error(`${detail}${stderr ? `\n${stderr}` : ''}`);
+    };
+    const cleanup = () => {
+      worker.off('message', onMessage);
+      worker.off('error', onError);
+      worker.off('close', onClose);
+    };
+    const onMessage = (message: unknown) => {
+      cleanup();
+      resolve([message]);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(failure(`Runtime worker failed before its expected message: ${error.message}`));
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup();
+      reject(failure(`Runtime worker exited ${code ?? signal} before its expected message`));
+    };
+    if (worker.exitCode !== null || worker.signalCode !== null) {
+      onClose(worker.exitCode, worker.signalCode);
+      return;
+    }
+    worker.once('message', onMessage);
+    worker.once('error', onError);
+    // close 在 stderr 读完后触发，让 CAS 失败保留实际诊断。
+    worker.once('close', onClose);
+  });
+}
 
 async function bundleStore(root: string): Promise<string> {
   const outfile = path.join(root, 'store.mjs');
@@ -391,16 +445,12 @@ import { createHash } from 'node:crypto';
       windowsHide: true,
     },
   );
-  let stderr = '';
+  const diagnostics = { stderr: '' };
+  workerDiagnostics.set(worker, diagnostics);
   worker.stderr?.on('data', (chunk) => {
-    stderr += String(chunk);
+    diagnostics.stderr = (diagnostics.stderr + String(chunk)).slice(-16 * 1024);
   });
-  await new Promise<void>((resolve, reject) => {
-    worker.once('message', () => resolve());
-    worker.once('error', reject);
-    worker.once('exit', (code) => {
-      if (code !== 0) reject(new Error(stderr || `Runtime worker exited ${code}`));
-    });
-  });
+  const [ready] = await workerMessage(worker);
+  expect(ready).toEqual({ ready: true });
   return worker;
 }

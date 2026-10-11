@@ -8,24 +8,136 @@ import { createHash } from 'node:crypto';
 import { parse } from 'yaml';
 import { createCreatorRuntime, creatorSummary } from '../../../domains/workflow-creation/index.js';
 import { previewWorkflowApplicationInstall } from '../../../domains/workflow-application/index.js';
+import type { ExternalCommandOptions } from '../../../platform/process/external-command.js';
 
-const { runExternalCommandAsync } = vi.hoisted(() => ({ runExternalCommandAsync: vi.fn() }));
-vi.mock('../../../platform/process/external-command.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../platform/process/external-command.js')>()),
-  runExternalCommandAsync,
+function isProcessId(value: string | undefined): boolean {
+  return (
+    typeof value === 'string' && /^[1-9]\d*$/u.test(value) && Number.isSafeInteger(Number(value))
+  );
+}
+
+function isWindowsProcessIdentityProbe(
+  command: string,
+  parameters: readonly string[],
+  options: ExternalCommandOptions | undefined,
+): boolean {
+  if (options?.maxBufferBytes !== 4096) return false;
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  const systemCommand = (...parts: string[]) =>
+    path.win32.normalize(command).toLowerCase() ===
+    path.win32.normalize(path.join(systemRoot, ...parts)).toLowerCase();
+  const probeFile = (file: string, extension: 'cs' | 'exe') => {
+    const relative = path
+      .relative(path.join(os.tmpdir(), 'comet-process-identity'), file)
+      .split(path.sep)
+      .join('/');
+    return new RegExp(
+      `^[a-f0-9]{64}/probe-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\\.${extension}$`,
+      'u',
+    ).test(relative);
+  };
+  if (
+    ['Framework64', 'Framework'].some((framework) =>
+      systemCommand('Microsoft.NET', framework, 'v4.0.30319', 'csc.exe'),
+    )
+  ) {
+    const source = parameters[4];
+    return (
+      options.timeoutMs === 1500 &&
+      parameters.length === 5 &&
+      parameters[0] === '/nologo' &&
+      parameters[1] === '/target:exe' &&
+      parameters[2] === '/platform:anycpu' &&
+      probeFile(source, 'cs') &&
+      parameters[3] === `/out:${source.slice(0, -3)}.exe`
+    );
+  }
+  if (systemCommand('System32', 'wbem', 'WMIC.exe')) {
+    return (
+      options.timeoutMs === 300 &&
+      parameters.length === 6 &&
+      parameters[0] === 'process' &&
+      parameters[1] === 'where' &&
+      parameters[2]?.startsWith('processid=') &&
+      isProcessId(parameters[2].slice('processid='.length)) &&
+      parameters[3] === 'get' &&
+      parameters[4] === 'creationdate' &&
+      parameters[5] === '/value'
+    );
+  }
+  if (systemCommand('System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')) {
+    const pid =
+      /^\(Get-Process -Id ([1-9]\d*) -ErrorAction Stop\)\.StartTime\.ToUniversalTime\(\)\.Ticks\.ToString\(\)$/u.exec(
+        parameters[4] ?? '',
+      )?.[1];
+    return (
+      options.timeoutMs === 1000 &&
+      parameters.length === 5 &&
+      parameters[0] === '-NoLogo' &&
+      parameters[1] === '-NoProfile' &&
+      parameters[2] === '-NonInteractive' &&
+      parameters[3] === '-Command' &&
+      isProcessId(pid)
+    );
+  }
+  return (
+    options.timeoutMs === 1000 &&
+    probeFile(command, 'exe') &&
+    parameters.length === 1 &&
+    isProcessId(parameters[0])
+  );
+}
+
+const { runExternalCommandAsync, processIdentityProbe } = vi.hoisted(() => ({
+  runExternalCommandAsync: vi.fn(),
+  processIdentityProbe: vi.fn(),
 }));
+vi.mock('../../../platform/process/external-command.js', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('../../../platform/process/external-command.js')>();
+  processIdentityProbe.mockImplementation(original.runExternalCommandAsync);
+  return {
+    ...original,
+    runExternalCommandAsync: (...args: Parameters<typeof original.runExternalCommandAsync>) => {
+      const [command, parameters, options] = args;
+      // 仅固定的锁身份探测保持真实；模型、Docker 与其它命令仍由测试替身接管。
+      if (
+        command === '/bin/ps' &&
+        parameters.length === 4 &&
+        parameters[0] === '-p' &&
+        isProcessId(parameters[1]) &&
+        parameters[2] === '-o' &&
+        parameters[3] === 'lstart=' &&
+        options?.timeoutMs === 5000 &&
+        options.maxBufferBytes === 4096
+      ) {
+        return processIdentityProbe(...args);
+      }
+      if (
+        process.platform === 'win32' &&
+        isWindowsProcessIdentityProbe(command, parameters, options)
+      ) {
+        return processIdentityProbe(...args);
+      }
+      return runExternalCommandAsync(...args);
+    },
+  };
+});
 
 let root: string;
 beforeAll(() => ensureCliBuilt(process.cwd()));
 beforeEach(async () => {
   runExternalCommandAsync.mockReset();
+  processIdentityProbe.mockClear();
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-creator-eval-'));
   await fs.mkdir(path.join(root, 'node_modules/@rpamis'), { recursive: true });
   await fs.symlink(process.cwd(), path.join(root, 'node_modules/@rpamis/comet'), 'junction');
 });
 
 function fakeEval(status: 'passed' | 'failed' | 'incomplete') {
-  runExternalCommandAsync.mockImplementation(async (_command, _args, options) => {
+  runExternalCommandAsync.mockImplementation(async (command, args, options) => {
+    expect(command).toBe(process.execPath);
+    expect(args[1]).toBe('eval');
     const prepared = JSON.parse(options.env.COMET_APPLICATION_EVAL_CONTEXT);
     const manifestPath = path.join(root, '.comet/eval/generated/frozen-cases/eval.yaml');
     await fs.mkdir(path.dirname(manifestPath), { recursive: true });
@@ -72,6 +184,126 @@ async function choose(run: Awaited<ReturnType<typeof compile>>, choice: string) 
   });
   return (await runtime.runUntilBlocked({ runId: run.runId, executorId: 'creator-local' })).run;
 }
+
+it.runIf(process.platform === 'darwin')(
+  'keeps an expired macOS process identity probe outside the Eval mock',
+  async () => {
+    fakeEval('failed');
+    const { readProcessIdentity } = await import('../../../platform/process/process-identity.js');
+    const missingPid = 2_147_483_647;
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await expect(readProcessIdentity(missingPid)).resolves.toBeNull();
+      expect(processIdentityProbe).toHaveBeenCalledTimes(1);
+      now += 10_000;
+      await expect(readProcessIdentity(missingPid)).resolves.toBeNull();
+      expect(processIdentityProbe).toHaveBeenCalledTimes(1);
+      now += 1;
+      await expect(readProcessIdentity(missingPid)).resolves.toBeNull();
+      expect(processIdentityProbe).toHaveBeenCalledTimes(2);
+      expect(runExternalCommandAsync).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  },
+);
+
+it.runIf(process.platform === 'win32')(
+  'routes only the declared Windows identity signatures outside the Eval mock',
+  async () => {
+    const { runExternalCommandAsync: execute } =
+      await import('../../../platform/process/external-command.js');
+    const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+    const executable = path.join(
+      os.tmpdir(),
+      'comet-process-identity',
+      'a'.repeat(64),
+      'probe-00000000-0000-4000-8000-000000000001.exe',
+    );
+    const source = executable.slice(0, -4) + '.cs';
+    const pid = String(process.pid);
+    type Command = Parameters<typeof execute>;
+    const compileArgs = [
+      '/nologo',
+      '/target:exe',
+      '/platform:anycpu',
+      `/out:${executable}`,
+      source,
+    ];
+    const compiler = path.join(systemRoot, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+    const wmic = path.join(systemRoot, 'System32', 'wbem', 'WMIC.exe');
+    const powershell = path.join(
+      systemRoot,
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
+    const powershellArgs = [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`,
+    ];
+    const nativeOptions = { timeoutMs: 1000, maxBufferBytes: 4096 };
+    const commands: Command[] = [
+      [compiler, compileArgs, { timeoutMs: 1500, maxBufferBytes: 4096 }],
+      [
+        path.join(systemRoot, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+        compileArgs,
+        { timeoutMs: 1500, maxBufferBytes: 4096 },
+      ],
+      [
+        wmic,
+        ['process', 'where', `processid=${pid}`, 'get', 'creationdate', '/value'],
+        { timeoutMs: 300, maxBufferBytes: 4096 },
+      ],
+      [powershell, powershellArgs, nativeOptions],
+      [executable, [pid], nativeOptions],
+    ];
+    const rejected: Command[] = [
+      ...commands.map(([command, args, options]): Command => [
+        command,
+        args,
+        { ...options, timeoutMs: options!.timeoutMs! + 1 },
+      ]),
+      [path.join(root, 'csc.exe'), compileArgs, commands[0][2]],
+      [compiler, [...compileArgs.slice(0, 3), `/out:${source}.exe`, source], commands[0][2]],
+      [
+        powershell,
+        [...powershellArgs.slice(0, 4), powershellArgs[4] + '; Get-Process'],
+        nativeOptions,
+      ],
+      [path.join(root, path.basename(executable)), [pid], nativeOptions],
+      [executable, [pid, 'extra'], nativeOptions],
+      [wmic, ['process', 'where', 'processid=-1', 'get', 'creationdate', '/value'], commands[2][2]],
+      [process.execPath, ['unrelated-command'], nativeOptions],
+      ['docker', ['ps'], nativeOptions],
+    ];
+    const realProbe = processIdentityProbe.getMockImplementation()!;
+    // 此用例仅验证路由；真实平台探测仍由原 Creator 集成测试覆盖。
+    processIdentityProbe.mockResolvedValue('identity-routing-fixture');
+    fakeEval('failed');
+    try {
+      for (const command of commands) {
+        await expect(execute(...command)).resolves.toBe('identity-routing-fixture');
+        expect(processIdentityProbe).toHaveBeenLastCalledWith(...command);
+      }
+      expect(runExternalCommandAsync).not.toHaveBeenCalled();
+      const allowedCalls = processIdentityProbe.mock.calls.length;
+      for (const command of rejected) {
+        await expect(execute(...command)).rejects.toThrow();
+        expect(runExternalCommandAsync).toHaveBeenLastCalledWith(...command);
+      }
+      expect(processIdentityProbe).toHaveBeenCalledTimes(allowedCalls);
+      expect(runExternalCommandAsync).toHaveBeenCalledTimes(rejected.length);
+    } finally {
+      processIdentityProbe.mockImplementation(realProbe);
+    }
+  },
+);
 
 it('runs the optional Eval once, cold-resumes its result and binds it to the installation preview', async () => {
   fakeEval('passed');
@@ -136,7 +368,9 @@ it('rejects an altered report before approving installation', async () => {
 
 it('retains the generation failure cause and original HTML report without exposing credentials', async () => {
   vi.stubEnv('BENCH_API_KEY', 'private-fixture-key');
-  runExternalCommandAsync.mockImplementation(async (_command, _args, options) => {
+  runExternalCommandAsync.mockImplementation(async (command, args, options) => {
+    expect(command).toBe(process.execPath);
+    expect(args[1]).toBe('eval');
     const prepared = JSON.parse(options.env.COMET_APPLICATION_EVAL_CONTEXT);
     const directory = path.dirname(prepared.resultFile);
     await fs.writeFile(

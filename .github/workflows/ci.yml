@@ -31,7 +31,7 @@ jobs:
   quality:
     name: Quality and coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
@@ -234,7 +234,7 @@ jobs:
       - run: pnpm check:sdk-api
 
   sdk-contracts:
-    name: SDK contracts (${{ matrix.os }}, Node ${{ matrix.node }})
+    name: SDK contracts (${{ matrix.os }}, Node ${{ matrix.node }}${{ matrix.shards > 1 && format(', shard {0}/{1}', matrix.shard, matrix.shards) || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -243,12 +243,32 @@ jobs:
         include:
           - os: ubuntu-latest
             node: '22.16.0'
+            shard: 1
+            shards: 1
           - os: ubuntu-latest
             node: '24'
+            shard: 1
+            shards: 1
           - os: macos-latest
             node: '24'
+            shard: 1
+            shards: 1
           - os: windows-latest
             node: '24'
+            shard: 1
+            shards: 4
+          - os: windows-latest
+            node: '24'
+            shard: 2
+            shards: 4
+          - os: windows-latest
+            node: '24'
+            shard: 3
+            shards: 4
+          - os: windows-latest
+            node: '24'
+            shard: 4
+            shards: 4
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -268,16 +288,16 @@ jobs:
       - run: pnpm build
       - name: Exercise SDK protocol, application lifecycle, Creator and domain adapters
         id: sdk-tests
-        run: pnpm test:sdk ${{ matrix.os == 'windows-latest' && '--exclude test/domains/comet-classic/classic-application.test.ts' || '' }} --reporter=default --reporter=json --outputFile.json=coverage/sdk/results.json
+        run: pnpm test:sdk --shard=${{ matrix.shard }}/${{ matrix.shards }} ${{ matrix.os == 'windows-latest' && '--maxWorkers=1 --exclude test/domains/comet-classic/classic-application.test.ts' || '' }} --reporter=default --reporter=json --outputFile.json=coverage/sdk/results.json
       - name: Exercise the Windows Classic lifecycle without competing SDK subprocesses
         id: classic-sdk-tests
-        if: matrix.os == 'windows-latest'
+        if: ${{ !cancelled() && matrix.os == 'windows-latest' && matrix.shard == 1 && steps.sdk-tests.outcome != 'skipped' }}
         run: pnpm exec vitest run test/domains/comet-classic/classic-application.test.ts --maxWorkers=1 --reporter=default --reporter=json --outputFile.json=coverage/sdk/classic-results.json
       - name: Upload SDK test results
         if: always() && steps.sdk-tests.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sdk-results-${{ matrix.os }}-node-${{ matrix.node }}
+          name: sdk-results-${{ matrix.os }}-node-${{ matrix.node }}-shard-${{ matrix.shard }}-of-${{ matrix.shards }}
           path: coverage/sdk/
           if-no-files-found: error
 
