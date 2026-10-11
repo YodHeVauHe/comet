@@ -14,6 +14,7 @@ import {
   defineWorkflow,
   hashRuntimeValue,
   RuntimeProtocolError,
+  parseWorkflowRun,
   type RuntimeStore,
   type WorkflowRun,
 } from '../engine/runtime.js';
@@ -48,7 +49,7 @@ import { resolveInstalledWorkflowApplication } from './installed-application.js'
 import { projectWorkflowApplicationRun } from './run-view.js';
 import { createApplicationHook } from './application-hook.js';
 
-interface ApplicationRunRecord {
+export interface ApplicationRunRecord {
   runId: string;
   revision: number;
   application: ApplicationIdentity;
@@ -135,6 +136,15 @@ export async function readWorkflowApplicationRun(
   applicationId: string,
   runId: string,
 ): Promise<WorkflowRun | null> {
+  return (await readWorkflowApplicationRunRecord(projectRoot, applicationId, runId))?.run ?? null;
+}
+
+/** 只读返回保存的固定身份；不加载应用模块或修复状态。 */
+export async function readWorkflowApplicationRunRecord(
+  projectRoot: string,
+  applicationId: string,
+  runId: string,
+): Promise<ApplicationRunRecord | null> {
   const record = await (await rawStore(projectRoot, applicationId, true)).read(runId);
   if (!record) return null;
   if (
@@ -143,7 +153,8 @@ export async function readWorkflowApplicationRun(
     record.revision !== record.run.revision
   )
     throw new RuntimeProtocolError('INVALID_RUN', '应用归属与 SDK Run 不一致');
-  return record.run;
+  record.run = parseWorkflowRun(record.run, runId);
+  return record;
 }
 
 export function parseWorkflowApplicationManifest(value: unknown): WorkflowApplicationManifest {

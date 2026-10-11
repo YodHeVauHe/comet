@@ -202,6 +202,18 @@ export interface ApplicationInstallPreview {
 }
 
 // @public (undocumented)
+export interface ApplicationRunRecord {
+    // (undocumented)
+    application: ApplicationIdentity;
+    // (undocumented)
+    revision: number;
+    // (undocumented)
+    run: WorkflowRun;
+    // (undocumented)
+    runId: string;
+}
+
+// @public (undocumented)
 export interface ApplicationSkillBinding {
     // (undocumented)
     authorizationChoices?: string[];
@@ -722,6 +734,21 @@ export function inspectSelectedWorkflowApplicationStatus(projectRoot: string): P
     };
 } | null>;
 
+// @public
+export function inspectWorkflowApplicationMaterial(identity: ApplicationIdentity): Promise<{
+    status: 'matched' | 'changed' | 'unavailable';
+    packageHash?: string;
+    manifest?: WorkflowApplicationManifest;
+    message?: string;
+}>;
+
+// @public (undocumented)
+export function inspectWorkflowApplicationPackage(packageRoot: string, expectedPackageHash: string): Promise<{
+    status: 'matched' | 'changed' | 'unavailable';
+    packageHash?: string;
+    message?: string;
+}>;
+
 // @public (undocumented)
 export function inspectWorkflowApplicationRun(projectRoot: string, applicationId: string, runId: string, options?: {
     readOnly?: boolean;
@@ -755,6 +782,9 @@ export function installWorkflowApplication(options: ApplicationDeliveryOptions &
         platforms: string[];
     }>;
 }>;
+
+// @public
+export function listWorkflowApplicationRunRecords(projectRoot: string): Promise<WorkflowApplicationRunObservation[]>;
 
 // @public (undocumented)
 export interface LoadedWorkflowApplication {
@@ -1192,6 +1222,9 @@ export function readSelectedWorkflowApplication(projectRoot: string): Promise<{
 export function readWorkflowApplicationRun(projectRoot: string, applicationId: string, runId: string): Promise<WorkflowRun | null>;
 
 // @public
+export function readWorkflowApplicationRunRecord(projectRoot: string, applicationId: string, runId: string): Promise<ApplicationRunRecord | null>;
+
+// @public
 export function reconcileApplicationSkill(application: LoadedWorkflowApplication, host: SkillExecutionHost, run: Readonly<WorkflowRun>, actionId: string, context?: RuntimeInvocationContext): Promise<{
     resolution: "not-executed";
     evidence: string;
@@ -1408,6 +1441,23 @@ export interface WorkflowApplicationManifest {
     skills: ApplicationSkillDependency[];
     // (undocumented)
     version: string;
+}
+
+// @public (undocumented)
+export interface WorkflowApplicationRunObservation {
+    // (undocumented)
+    applicationId: string;
+    // (undocumented)
+    error: {
+        code: string;
+        message: string;
+    } | null;
+    // (undocumented)
+    record: ApplicationRunRecord | null;
+    // (undocumented)
+    runId: string | null;
+    // (undocumented)
+    storageKey: string;
 }
 
 // (No @packageDocumentation comment for this package)

@@ -29,6 +29,8 @@ import {
 import { DashboardPluginHostError, type DashboardPluginHostFactory } from './plugin-host.js';
 import type { DashboardChangeTab } from './types.js';
 import { handleDashboardEvalRequest } from './eval-routes.js';
+import { handleDashboardApplicationRequest } from './application-routes.js';
+import { DashboardApplicationQueryError } from './application-collector.js';
 import {
   readUserEvalSettings,
   saveUserEvalSettings,
@@ -131,6 +133,13 @@ export async function startDashboardServer(
   const server = http.createServer((req, res) => {
     handleRequest(req, res, currentProjectPath, webRoot, pluginHostAccess, updates).catch(
       (error) => {
+        if (error instanceof DashboardApplicationQueryError) {
+          respondJson(res, req.method ?? 'GET', error.statusCode, {
+            code: error.code,
+            error: error.message,
+          });
+          return;
+        }
         if (error instanceof DashboardUpdateError) {
           respondJson(res, req.method ?? 'GET', error.statusCode, { error: error.message });
           return;
@@ -347,6 +356,23 @@ async function handleRequest(
         query: url.searchParams.get('q') ?? undefined,
       });
       respondJson(res, req.method, 200, overview);
+      return;
+    }
+
+    if (
+      [
+        '/application-runs',
+        '/application-run',
+        '/application-run-records',
+        '/application-run-artifact',
+      ].includes(subpath)
+    ) {
+      const result = await handleDashboardApplicationRequest(
+        project.path,
+        subpath,
+        url.searchParams,
+      );
+      respondJson(res, req.method, result.status, result.body);
       return;
     }
 

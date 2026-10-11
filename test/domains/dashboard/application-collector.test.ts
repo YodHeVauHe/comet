@@ -1,0 +1,297 @@
+import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
+import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  collectDashboardApplicationRunPage,
+  collectDashboardApplicationRunDetail,
+  collectDashboardApplicationRunRecords,
+  readDashboardApplicationArtifact,
+} from '../../../domains/dashboard/application-collector.js';
+import {
+  applicationObservationFixture,
+  creatorObservationFixture,
+  completeFixtureAction,
+} from '../../helpers/dashboard-application-fixture.js';
+import {
+  createRuntime,
+  createFileRuntimeStore,
+  type WorkflowRun,
+} from '../../../domains/engine/runtime.js';
+import { resolveWorkspaceRuntimeRootSync } from '../../../domains/workflow-contract/workspace-runtime.js';
+
+async function candidateEvidenceFixture(
+  project: string,
+  version: string,
+  status: 'passed' | 'failed',
+) {
+  const app = await applicationObservationFixture(project, { version, runId: `app-${version}` });
+  const runId = `creator-${version}`;
+  const store = createFileRuntimeStore<WorkflowRun>({
+    rootDir: path.join(resolveWorkspaceRuntimeRootSync(project), 'creator'),
+  });
+  const names = ['prepare', 'compile', 'verify', 'evaluate'];
+  const runtime = createRuntime({
+    store,
+    workflows: [
+      {
+        id: 'comet-creator',
+        version: '3',
+        entry: 'prepare',
+        steps: Object.fromEntries(names.map((id) => [id, { type: 'handoff', ref: id }])),
+        transitions: names.slice(1).map((to, i) => ({ from: names[i], to })),
+      },
+    ],
+  });
+  let run = await runtime.start({
+    runId,
+    workflow: { id: 'comet-creator', version: '3' },
+    input: { goal: 'Evidence fixture' },
+  });
+  run = await completeFixtureAction(runtime, run, 'prepare', {
+    plan: { manifest: { id: app.identity.id, version, base: 'standalone' } },
+  });
+  run = await completeFixtureAction(runtime, run, 'compile', {
+    file: path.join(app.identity.packageRoot, 'application.json'),
+    contentHash: app.packageHash,
+  });
+  run = await completeFixtureAction(runtime, run, 'verify', {
+    packageHash: app.packageHash,
+    checks: ['fixture validation'],
+  });
+  const result = {
+    schema: 'comet.workflow.application.eval.result.v1',
+    application: { id: app.identity.id, version, contentHash: app.packageHash },
+    experimentId: `eval-${version.replaceAll('.', '-')}`,
+    status,
+    settings: { agent: 'codex' },
+    taskNames: ['fixture case'],
+    limitations: [],
+    report: 'summary.md',
+  };
+  const reportDir = path.join(project, '.comet/eval/runs', result.experimentId);
+  await fs.mkdir(reportDir, { recursive: true });
+  await fs.writeFile(path.join(reportDir, 'application-result.json'), JSON.stringify(result));
+  await fs.writeFile(path.join(reportDir, 'summary.md'), '# Fixture evaluation\n');
+  run = await completeFixtureAction(runtime, run, 'evaluate', result);
+  return { ...app, creatorRun: run, reportDir };
+}
+
+describe('Comet Any observations', () => {
+  let root: string, project: string;
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-any-dashboard-'));
+    project = path.join(root, 'project');
+    await fs.mkdir(project);
+    vi.stubEnv('COMET_DATA_DIR', path.join(root, 'data'));
+  });
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('discovers early creation and distinguishes stopped creation from delivery', async () => {
+    await creatorObservationFixture(project);
+    await creatorObservationFixture(project, 'stopped', 'stop');
+    await creatorObservationFixture(project, 'delivered', 'install');
+    const page = await collectDashboardApplicationRunPage(project);
+    expect(page.items.find((i) => i.runId === 'creator-draft')).toMatchObject({
+      kind: 'creator',
+      application: null,
+      goal: '让发布说明自动附带证据',
+      status: 'running',
+    });
+    expect(page.items.find((i) => i.runId === 'stopped')?.status).toBe('stopped');
+    expect(page.items.find((i) => i.runId === 'delivered')?.status).toBe('delivered');
+  });
+  it('keeps fixed versions and all parallel actions, with read-only secret-free detail', async () => {
+    const fixture = await applicationObservationFixture(project, { parallel: true });
+    await applicationObservationFixture(project, { runId: 'old-run', version: '1.0.0' });
+    const page = await collectDashboardApplicationRunPage(project);
+    const selected = page.items.find((i) => i.runId === 'run-one')!;
+    expect(selected.application?.version).toBe('1.1.0');
+    expect(selected.activity).toMatchObject({ running: 2, decisions: 1 });
+    const before = await fixture.outer.read('run-one');
+    const detail = (await collectDashboardApplicationRunDetail(project, selected.locator))!;
+    expect(detail.material.status).toBe('matched');
+    expect(detail.currentIds).toHaveLength(3);
+    expect(
+      detail.records
+        .filter((r) => r.active)
+        .map((r) => r.kind)
+        .sort(),
+    ).toEqual(['action', 'action', 'decision']);
+    expect(JSON.stringify(detail)).not.toContain('private-');
+    expect(await fixture.outer.read('run-one')).toEqual(before);
+    const history = await collectDashboardApplicationRunRecords(project, selected.locator, {
+      limit: 2,
+    });
+    expect(history?.items).toHaveLength(2);
+    expect(history?.nextCursor).toBeTruthy();
+  });
+  it('does not hide healthy runs when another checkpoint is corrupt', async () => {
+    const bad = await applicationObservationFixture(project, { runId: 'broken' });
+    await applicationObservationFixture(project, { runId: 'healthy' });
+    const key = createHash('sha256').update(JSON.stringify('broken')).digest('hex');
+    await fs.writeFile(path.join(bad.rootDir, '.runtime-store-v2', key, 'checkpoint.json'), '{}');
+    const page = await collectDashboardApplicationRunPage(project);
+    expect(page.items.find((i) => i.runId === 'healthy')?.error).toBeNull();
+    const item = page.items.find((i) => i.runId === 'broken')!;
+    expect(item.status).toBe('unreadable');
+    expect((await collectDashboardApplicationRunDetail(project, item.locator))?.records).toEqual(
+      [],
+    );
+  });
+  it('follows an actual SDK child reference to its independent evidence wait', async () => {
+    const fixture = await applicationObservationFixture(project, { parallel: true, child: true });
+    expect(fixture.run.children).toHaveLength(1);
+    const page = await collectDashboardApplicationRunPage(project);
+    const parent = page.items.find((i) => i.runId === 'run-one')!;
+    const detail = (await collectDashboardApplicationRunDetail(project, parent.locator))!;
+    const child = detail.records.find((r) => r.childLocator)!;
+    const childDetail = (await collectDashboardApplicationRunDetail(project, child.childLocator!))!;
+    expect(childDetail.runId).toBe(fixture.run.children[0].runId);
+    expect(childDetail.parentLocator).toBe(parent.locator);
+    expect(childDetail.records.find((r) => r.kind === 'evidence')).toMatchObject({
+      status: 'evidence',
+      active: true,
+    });
+  });
+  it('retains separate activations of the same step and original rejection evidence', async () => {
+    const fixture = await applicationObservationFixture(project, {
+      parallel: true,
+      claimParallel: false,
+    });
+    let run = await fixture.runtime.dispatchCommand({
+      runId: fixture.run.runId,
+      expectedRevision: fixture.run.revision,
+      name: 'repeat',
+      commandId: 'repeat-one',
+      input: { scope: 'revised' },
+    });
+    const second = run.actions.filter((a) => a.stepId === 'draft').at(-1)!;
+    run = await fixture.runtime.claim({
+      runId: run.runId,
+      expectedRevision: run.revision,
+      actionId: second.id,
+      attempt: second.attempt,
+      inputHash: second.inputHash,
+      executorId: 'fixture-host',
+      claimToken: 'private-rejected',
+      capabilities: [],
+    });
+    await fixture.runtime
+      .recordOutcome({
+        runId: run.runId,
+        expectedRevision: run.revision,
+        outcome: {
+          actionId: second.id,
+          attempt: 1,
+          inputHash: second.inputHash,
+          claimToken: 'private-rejected',
+          outcomeId: 'rejected-one',
+          status: 'succeeded',
+          output: { missing: 'required scope' },
+        },
+      })
+      .catch(() => undefined);
+    const item = (await collectDashboardApplicationRunPage(project)).items.find(
+      (i) => i.runId === 'run-one',
+    )!;
+    const detail = (await collectDashboardApplicationRunDetail(project, item.locator))!;
+    const activations = detail.records.filter((r) => r.stepId === 'draft');
+    expect(activations).toHaveLength(2);
+    expect(activations[0].id).not.toBe(activations[1].id);
+    expect((activations[1].data as { rejectedOutcomes: unknown[] }).rejectedOutcomes).toHaveLength(
+      1,
+    );
+    expect(JSON.stringify(detail)).not.toContain('private-rejected');
+  });
+  it('rejects changed or cross-query cursors instead of mixing pages', async () => {
+    await creatorObservationFixture(project, 'one');
+    await creatorObservationFixture(project, 'two');
+    const first = await collectDashboardApplicationRunPage(project, { limit: 1 });
+    const next = await collectDashboardApplicationRunPage(project, {
+      limit: 1,
+      cursor: first.nextCursor!,
+    });
+    expect(next.items[0].locator).not.toBe(first.items[0].locator);
+    await expect(
+      collectDashboardApplicationRunPage(project, { q: 'one', cursor: first.nextCursor! }),
+    ).rejects.toMatchObject({ code: 'STALE_APPLICATION_CURSOR' });
+    await creatorObservationFixture(project, 'three');
+    await expect(
+      collectDashboardApplicationRunPage(project, { cursor: first.nextCursor! }),
+    ).rejects.toMatchObject({ code: 'STALE_APPLICATION_CURSOR' });
+  });
+  it('binds inline previews to the selected record and rejects arbitrary artifact ids', async () => {
+    await applicationObservationFixture(project, { parallel: true });
+    const item = (await collectDashboardApplicationRunPage(project)).items[0];
+    const detail = (await collectDashboardApplicationRunDetail(project, item.locator))!;
+    const preview = await readDashboardApplicationArtifact(
+      project,
+      item.locator,
+      detail.artifacts[0].id,
+    );
+    expect(preview?.exists).toBe(true);
+    expect(JSON.stringify(preview)).not.toContain('private-fixture-api-key');
+    await expect(
+      readDashboardApplicationArtifact(project, item.locator, '../../secret'),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    await expect(collectDashboardApplicationRunDetail(project, '../../')).rejects.toMatchObject({
+      statusCode: 400,
+    });
+  });
+  it('separates local success, failed model evidence and missing host evidence by fixed version', async () => {
+    const current = await candidateEvidenceFixture(project, '1.1.0', 'failed');
+    await candidateEvidenceFixture(project, '1.2.0', 'passed');
+    const page = await collectDashboardApplicationRunPage(project);
+    const item = page.items.find((r) => r.runId === 'app-1.1.0')!;
+    const detail = (await collectDashboardApplicationRunDetail(project, item.locator))!;
+    expect(detail.evidence.map((e) => [e.kind, e.status])).toEqual([
+      ['local', 'passed'],
+      ['model', 'failed'],
+      ['host', 'not-recorded'],
+    ]);
+    expect(detail.sourceCreators[0].runId).toBe('creator-1.1.0');
+    expect(detail.otherEvidence.some((e) => e.version === '1.2.0' && e.status === 'stale')).toBe(
+      true,
+    );
+    await fs.unlink(path.join(current.reportDir, 'application-result.json'));
+    const missing = (await collectDashboardApplicationRunDetail(project, item.locator))!;
+    expect(missing.evidence.find((e) => e.kind === 'model')?.status).toBe('stale');
+    expect(missing.error).toBeNull();
+    expect(missing.records.length).toBeGreaterThan(0);
+    await fs.writeFile(path.join(current.identity.packageRoot, 'SKILL.md'), 'changed candidate');
+    const creator = page.items.find((r) => r.runId === 'creator-1.1.0')!;
+    const changed = (await collectDashboardApplicationRunDetail(project, creator.locator))!;
+    expect(changed.material.status).toBe('changed');
+    expect(changed.evidence.find((e) => e.kind === 'local')?.status).toBe('stale');
+  });
+  it('checks artifact bytes and refuses bound references outside the project', async () => {
+    const fixture = await applicationObservationFixture(project);
+    const body = 'original artifact';
+    const digest = createHash('sha256').update(body).digest('hex');
+    await fs.writeFile(path.join(project, 'result.txt'), body);
+    await fs.writeFile(path.join(root, 'outside.txt'), 'outside');
+    await completeFixtureAction(fixture.runtime, fixture.run, 'draft', { scope: 'current' }, [
+      { uri: 'result.txt', sha256: digest },
+      { uri: path.join(root, 'outside.txt'), sha256: digest },
+    ]);
+    const item = (await collectDashboardApplicationRunPage(project)).items[0];
+    const detail = (await collectDashboardApplicationRunDetail(project, item.locator))!;
+    const artifact = detail.artifacts.find((a) => a.uri === 'result.txt')!;
+    expect(
+      (await readDashboardApplicationArtifact(project, item.locator, artifact.id))?.status,
+    ).toBe('matched');
+    await fs.writeFile(path.join(project, 'result.txt'), 'changed');
+    expect(
+      (await readDashboardApplicationArtifact(project, item.locator, artifact.id))?.status,
+    ).toBe('changed');
+    const outside = detail.artifacts.find((a) => a.uri === path.join(root, 'outside.txt'))!;
+    await expect(
+      readDashboardApplicationArtifact(project, item.locator, outside.id),
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+});

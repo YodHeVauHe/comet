@@ -6,6 +6,7 @@ export default defineConfig({
     'dashboard-browser.spec.ts',
     'dashboard-eval-browser.spec.ts',
     'dashboard-update-browser.spec.ts',
+    'dashboard-any-browser.spec.ts',
   ],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),

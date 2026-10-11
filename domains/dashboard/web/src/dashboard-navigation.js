@@ -24,11 +24,18 @@ function normalize(value) {
       projectId,
       pluginId: value.pluginId,
     };
-  return {
+  const route = {
     view: 'workflow',
     projectId,
-    workflow: ['native', 'classic'].includes(value?.workflow) ? value.workflow : null,
+    workflow: ['native', 'classic', 'any'].includes(value?.workflow) ? value.workflow : null,
   };
+  if (route.workflow === 'any') {
+    if (id(value.runLocator)) route.runLocator = id(value.runLocator);
+    if (id(value.recordId)) route.recordId = id(value.recordId);
+    if (['steps', 'history', 'artifacts', 'evidence'].includes(value.runTab))
+      route.runTab = value.runTab;
+  }
+  return route;
 }
 
 export function readDashboardNavigation(browser = window) {

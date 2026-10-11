@@ -1,0 +1,211 @@
+// 仅现有 ?demo 展示模式使用；真实工作区始终请求只读 API。
+const locator = (kind, n) => `${kind}:${String(n).padStart(64, '0')}`;
+const identity = (version) => ({
+  id: 'grill-suite',
+  version,
+  base: 'standalone',
+  contentHash: 'a'.repeat(64),
+  packageHash: 'b'.repeat(64),
+});
+const record = (id, title, phase, status, kind = 'action', sequence = 1, data = {}) => ({
+  id,
+  stepId: id,
+  title,
+  phase,
+  status,
+  kind,
+  sequence,
+  attempt: kind === 'action' ? 1 : null,
+  type: kind === 'decision' ? 'user_decision' : kind === 'evidence' ? 'host-proof' : 'handoff',
+  active: ['running', 'waiting', 'evidence', 'child', 'pending'].includes(status),
+  data,
+  childLocator: null,
+  childRunId: null,
+});
+const proof = (version) =>
+  [
+    { kind: 'local', status: 'passed', summary: '本地应用、固定依赖与 Runtime 契约校验已完成' },
+    { kind: 'model', status: 'not-recorded', summary: '当前固定内容没有模型评估记录' },
+    {
+      kind: 'host',
+      status: 'not-recorded',
+      summary: '没有独立宿主验证记录；本地校验和模型评估不能替代宿主验收',
+    },
+  ].map((e) => ({
+    ...e,
+    version,
+    contentHash: 'b'.repeat(64),
+    sourceLocator: null,
+    sourceRunId: null,
+    report: null,
+    evalRunId: null,
+    details: null,
+  }));
+const summary = (kind, n, runId, goal, status, app = null) => ({
+  locator: locator(kind, n),
+  kind,
+  isChild: n === 6,
+  parentRunId: n === 6 ? 'run-128' : null,
+  parentLocator: n === 6 ? locator('application', 4) : null,
+  runId,
+  title: app?.id ?? goal,
+  goal,
+  status,
+  revision: 24,
+  application: app,
+  applicationId: app?.id ?? null,
+  error: null,
+  activity: {
+    pending: 0,
+    running: n === 4 ? 2 : status === 'running' ? 1 : 0,
+    unknown: 0,
+    decisions: n === 4 ? 1 : status === 'waiting' ? 1 : 0,
+    evidence: 0,
+    children: 0,
+  },
+});
+const summaries = [
+  summary('creator', 1, 'creator-041', '增加独立审查与恢复路径。', 'waiting', identity('1.2.0')),
+  summary('creator', 2, 'creator-draft', '让发布说明自动附带证据', 'running'),
+  summary('creator', 3, 'creator-040', '创建可安装的开发工作流。', 'delivered', identity('1.1.0')),
+  summary(
+    'application',
+    4,
+    'run-128',
+    '给发布流程增加产物校验与独立审查。',
+    'running',
+    identity('1.1.0'),
+  ),
+  summary('application', 5, 'run-127', '完善输入校验。', 'completed', identity('1.1.0')),
+  summary(
+    'application',
+    6,
+    'review-022',
+    '核对父运行的实现与验收证据。',
+    'waiting',
+    identity('1.1.0'),
+  ),
+];
+function detail(summary) {
+  let records =
+    summary.kind === 'creator'
+      ? [
+          record('prepare', '整理创作方案', '准备方案', 'succeeded'),
+          record('compile', '编译应用', '构建与校验', 'succeeded'),
+          record('verify', '校验应用与依赖', '构建与校验', 'succeeded'),
+          record('confirm', '确认安装', '确认安装', 'waiting', 'decision', 15, {
+            proposal: { version: '1.2.0', scope: 'project', host: 'codex' },
+            choices: ['approved', 'revise', 'rejected'],
+          }),
+          record('install', '安装与交付', '交付', 'pending', 'ready', null),
+        ]
+      : [
+          record('interview', '追问与记录决定', '执行步骤', 'succeeded', 'action', 3, {
+            outcome: {
+              attempt: 1,
+              status: 'succeeded',
+              summary: '方案已确认',
+              output: { scope: 'current' },
+            },
+          }),
+          record('implement', '实现工作流步骤', '执行步骤', 'running', 'action', 9, {
+            attempt: 2,
+            reconciliations: [
+              { attempt: 1, resolution: 'not-executed', evidence: '核对原宿主后确认未执行' },
+            ],
+          }),
+          record('regression', '执行回归检查', '执行步骤', 'running', 'action', 10),
+          record('approve', '确认文档发布范围', '执行步骤', 'waiting', 'decision', 11, {
+            proposal: { scope: 'documentation' },
+            choices: ['approved', 'rejected'],
+          }),
+          {
+            ...record('review', '独立审查子流程', '执行步骤', 'child', 'action', 12),
+            childLocator: locator('application', 6),
+            childRunId: 'review-022',
+          },
+        ];
+  if (!summary.application)
+    records = [record('analyze', '理解目标与调查 Skills', '准备方案', 'running')];
+  if (summary.runId === 'review-022')
+    records = [
+      record('evidence', '收集宿主验收证据', '执行步骤', 'evidence', 'evidence', 3, {
+        kind: 'host-proof',
+      }),
+    ];
+  if (['delivered', 'completed'].includes(summary.status))
+    records = records.map((r) => ({
+      ...r,
+      status: 'succeeded',
+      active: false,
+      childLocator: null,
+    }));
+  return {
+    ...summary,
+    readAt: new Date().toISOString(),
+    sequence: 15,
+    workflow: { id: 'demo', version: '1' },
+    records,
+    currentIds: records.filter((r) => r.active).map((r) => r.id),
+    artifacts: [
+      {
+        id: 'demo-output',
+        label: 'observed-output.json',
+        recordId: records[0]?.id,
+        uri: null,
+        sha256: null,
+        value: { example: true },
+      },
+    ],
+    evidence: proof(summary.application?.version ?? null),
+    otherEvidence: [],
+    definitionStatus: 'observed',
+    material: { status: summary.application ? 'matched' : 'not-generated' },
+    fixedIdentity: null,
+    sourceCreators:
+      summary.kind === 'application'
+        ? [{ locator: locator('creator', 3), runId: 'creator-040', version: '1.1.0' }]
+        : [],
+    children: [],
+    inspection: {
+      commandArgs: ['comet', 'creator', 'status', summary.runId, '--json'],
+      request: null,
+    },
+    relatedChange: null,
+  };
+}
+export function readApplicationDemo(endpoint, query = {}) {
+  if (endpoint === 'application-runs') {
+    const search = String(query.q ?? '').toLowerCase();
+    const items = summaries.filter(
+      (s) =>
+        `${s.title} ${s.goal} ${s.runId}`.toLowerCase().includes(search) &&
+        (query.status === 'attention'
+          ? s.status === 'waiting'
+          : query.status === 'active'
+            ? ['running', 'waiting'].includes(s.status)
+            : true),
+    );
+    return {
+      items,
+      total: items.length,
+      nextCursor: null,
+      fingerprint: 'demo',
+      readAt: new Date().toISOString(),
+      errors: [],
+    };
+  }
+  const item = summaries.find((s) => s.locator === query.locator);
+  if (!item) throw Object.assign(new Error('示例记录不存在'), { status: 404 });
+  if (endpoint === 'application-run') return detail(item);
+  if (endpoint === 'application-run-artifact')
+    return {
+      key: 'demo-output',
+      label: 'observed-output.json',
+      path: 'observed-output.json',
+      exists: true,
+      content: '{\n  "example": true\n}',
+      status: 'recorded',
+    };
+  return { items: detail(item).records, total: detail(item).records.length, nextCursor: null };
+}

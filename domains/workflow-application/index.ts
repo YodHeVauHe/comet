@@ -1,12 +1,19 @@
 export {
   loadWorkflowApplication,
   readWorkflowApplicationRun,
+  readWorkflowApplicationRunRecord,
   resolveWorkflowApplicationFile,
   selectWorkflowApplication,
   readSelectedWorkflowApplication,
   inspectWorkflowApplicationRun,
   inspectSelectedWorkflowApplicationStatus,
 } from './application.js';
+export {
+  listWorkflowApplicationRunRecords,
+  inspectWorkflowApplicationMaterial,
+  inspectWorkflowApplicationPackage,
+} from './run-observation.js';
+export type { WorkflowApplicationRunObservation } from './run-observation.js';
 export { inspectApplicationSkill, adaptApplicationSkill } from './skill-adapter.js';
 export { rewriteMarkdownResourceLinks } from './markdown-resources.js';
 export { createApplicationSkillExecutor, reconcileApplicationSkill } from './skill-executor.js';
@@ -55,3 +62,4 @@ export { resolveInstalledWorkflowApplication } from './installed-application.js'
 
 export { projectWorkflowApplicationRun } from './run-view.js';
 export type { SelectedWorkflowApplicationStatus } from './application.js';
+export type { ApplicationRunRecord } from './application.js';

@@ -208,10 +208,31 @@ export interface FileRuntimeStoreOptions {
 }
 
 // @public (undocumented)
+export interface FileRuntimeStoreRun<T extends RuntimeRecord> {
+    // (undocumented)
+    error: {
+        code: string;
+        message: string;
+    } | null;
+    // (undocumented)
+    record: T | null;
+    // (undocumented)
+    runId: string | null;
+    // (undocumented)
+    storageKey: string;
+}
+
+// @public (undocumented)
 export function hashRuntimeValue(value: unknown): string;
 
 // @public (undocumented)
 export type InvalidateRuntimeEvidence = RecordRuntimeEvidence;
+
+// @public
+export function listFileRuntimeStoreRuns<T extends RuntimeRecord = RuntimeRecord>(options: FileRuntimeStoreOptions): Promise<FileRuntimeStoreRun<T>[]>;
+
+// @public
+export function parseWorkflowRun(value: unknown, expectedRunId?: string): WorkflowRun;
 
 // @public (undocumented)
 export const PORTABLE_RUN_CHECKPOINT_KEY = "run_checkpoint";

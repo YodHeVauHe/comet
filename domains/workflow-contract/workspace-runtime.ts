@@ -32,6 +32,19 @@ import {
 
 export { resolveWorkspaceRuntimeRootSync };
 
+/** 只读发现当前与未迁移的旧 Runtime，不创建目录或开始迁移。 */
+export async function readWorkspaceRuntimeRoots(projectRoot: string): Promise<string[]> {
+  const root = await fs.realpath(projectRoot);
+  const current = resolveWorkspaceRuntimeRootSync(root);
+  const prior = await inspectProtectedProjectPath(root, '.comet/runtime', {
+    label: '旧 Workspace Runtime 只读查询',
+  });
+  if (!prior.exists || (await isWorkspaceRuntimeMigrationFence(prior.target))) return [current];
+  if (!(await fs.lstat(prior.target)).isDirectory())
+    throw new Error('旧 Workspace Runtime 必须是真实目录');
+  return [current, prior.target];
+}
+
 const FENCE_SCHEMA = 'comet.workspace-runtime-migration.v1';
 const FENCE_MARKER = '.comet-runtime-migration.json';
 const JOURNAL_SCHEMA = 'comet.workspace-runtime-migration-journal.v1';

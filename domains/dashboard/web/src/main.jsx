@@ -45,6 +45,7 @@ import {
 } from 'antd';
 import {
   BranchesOutlined,
+  AppstoreOutlined,
   BulbOutlined,
   CheckCircleOutlined,
   CheckOutlined,
@@ -81,6 +82,7 @@ import {
   runMermaid,
 } from './markdown-preview.js';
 import { NativeWorkflowPanel } from './native-workflow-panel.jsx';
+import { AnyWorkflowPanel } from './any-workflow-panel.jsx';
 import { EvalPanel } from './eval-panel.jsx';
 import { EvalSettings } from './eval-settings.jsx';
 import { DashboardVersion, DashboardUpdateModal, useDashboardUpdate } from './dashboard-update.jsx';
@@ -517,6 +519,7 @@ function DashboardApp({
   );
   const [evalOpen, setEvalOpen] = useState(() => !embedded && navigation.view === 'eval');
   const [evalRefreshToken, setEvalRefreshToken] = useState(0);
+  const [applicationRefreshToken, setApplicationRefreshToken] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('comet.personal-memory');
   const [settingsPage, setSettingsPage] = useState(null);
@@ -1643,22 +1646,35 @@ function DashboardApp({
                   : {
                       view: 'workflow',
                       projectId: nextProjectId,
-                      workflow: resolveDashboardProjectWorkflow(routeProject).workflow,
+                      workflow:
+                        workflow === 'any'
+                          ? 'any'
+                          : resolveDashboardProjectWorkflow(routeProject).workflow,
                     },
               );
             }
             resetSelectedProject(nextProjectId);
             const nextProject = projects.find((project) => project.id === nextProjectId) ?? null;
             const nextWorkflow = resolveDashboardProjectWorkflow(nextProject);
-            setWorkflow(nextWorkflow.workflow);
+            setWorkflow(workflow === 'any' ? 'any' : nextWorkflow.workflow);
             setWorkflowSource(nextWorkflow.source);
           }}
           loading={loading}
           query={query}
           onQuery={setQuery}
-          searchPlaceholder={evalOpen ? t('搜索评估目标或运行记录…') : undefined}
+          searchPlaceholder={
+            evalOpen
+              ? t('搜索评估目标或运行记录…')
+              : workflow === 'any'
+                ? t('搜索目标或应用…')
+                : undefined
+          }
           onMenu={() => setRailOpen(true)}
           onRefresh={async () => {
+            if (workflow === 'any' && !evalOpen && !pluginSelection) {
+              setApplicationRefreshToken((value) => value + 1);
+              return;
+            }
             if (evalOpen) {
               setEvalRefreshToken((value) => value + 1);
               return;
@@ -1717,6 +1733,33 @@ function DashboardApp({
                 onInvoke={(capability, input) =>
                   invokeActivePlugin(pluginSelection, capability, input)
                 }
+              />
+            ) : workflow === 'any' ? (
+              <AnyWorkflowPanel
+                key={activeProjectId ?? 'demo'}
+                projectId={activeProjectId}
+                projectPath={activeProject?.path ?? snapshot.project.path}
+                query={query}
+                onQuery={setQuery}
+                refreshToken={applicationRefreshToken}
+                onPreview={setArtifact}
+                demo={useDemo}
+                onRelatedChange={async (related) => {
+                  setWorkflow(related.workflow);
+                  if (!embedded)
+                    navigateDashboard({
+                      view: 'workflow',
+                      workflow: related.workflow,
+                      projectId: activeProjectId,
+                    });
+                  if (related.workflow === 'native')
+                    await selectNativeChange({
+                      locator: related.locator,
+                      name: related.name,
+                      status: related.status,
+                    });
+                  else await selectChange(related.locator);
+                }}
               />
             ) : workflow === 'native' ? (
               <NativeWorkflowPanel
@@ -4344,6 +4387,7 @@ function AntSidebar({
           items={[
             { key: 'classic', icon: <BranchesOutlined />, label: t('Classic 工作流') },
             { key: 'native', icon: <FileTextOutlined />, label: t('Native 工作流') },
+            { key: 'any', icon: <AppstoreOutlined />, label: 'Comet Any' },
           ]}
           onClick={({ key }) => {
             onPluginSelect(null);

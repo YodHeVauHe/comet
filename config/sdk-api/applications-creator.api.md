@@ -8,6 +8,21 @@
 export function createCreatorRuntime(projectRoot: string): WorkflowRuntime;
 
 // @public (undocumented)
+export interface CreatorRunObservation {
+    // (undocumented)
+    error: {
+        code: string;
+        message: string;
+    } | null;
+    // (undocumented)
+    run: WorkflowRun | null;
+    // (undocumented)
+    runId: string | null;
+    // (undocumented)
+    storageKey: string;
+}
+
+// @public (undocumented)
 export function creatorSummary(run: WorkflowRun): {
     runId: string;
     revision: number;
@@ -41,6 +56,9 @@ export function creatorSummary(run: WorkflowRun): {
 };
 
 // @public
+export function listCreatorRunRecords(projectRoot: string): Promise<CreatorRunObservation[]>;
+
+// @public
 export function listCreatorRuns(projectRoot: string): Promise<{
     runId: string;
     revision: number;
@@ -72,6 +90,9 @@ export function listCreatorRuns(projectRoot: string): Promise<{
     } | null;
     hostEvidence: string;
 }[]>;
+
+// @public (undocumented)
+export function readCreatorRunRecord(projectRoot: string, runId: string): Promise<WorkflowRun | null>;
 
 // (No @packageDocumentation comment for this package)
 

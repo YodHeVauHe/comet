@@ -43,6 +43,9 @@ export type {
   WorkflowTransition,
 } from './workflow-definition.js';
 export { createMemoryRuntimeStore, createFileRuntimeStore } from './runtime-store.js';
+export { listFileRuntimeStoreRuns } from './runtime-store-discovery.js';
+export type { FileRuntimeStoreRun } from './runtime-store-discovery.js';
+export { parseWorkflowRun } from './workflow-run-validation.js';
 export type { RuntimeStore, RuntimeRecord, FileRuntimeStoreOptions } from './runtime-store.js';
 export { RuntimeProtocolError } from './runtime-errors.js';
 export type { RuntimeErrorCode, RuntimeErrorRecovery } from './runtime-errors.js';

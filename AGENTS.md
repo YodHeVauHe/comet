@@ -105,7 +105,7 @@ pnpm test           # 高风险修改或最终交付前需要本地全量验证�
 - `domains/workflow-generation/`：确认方案的确定性装配与本地样板入口；可调用 Native 和 Classic 的公开应用工厂准备样板，不能接管领域审批、验收或 Archive。应用安装预览、不可变版本与本地导出位于 `workflow-application`；平台路径和 Runtime 依赖安装位于 `platform/`。
 - `domains/workflow-creation/`：Creator 的固定 SDK 创作流程，关联自然语言目标、具体方案、用户决定、固定依赖、编译验证与安装预览；复用 `workflow-generation` 组合器和 SDK Run，不保存第二套推进状态。
 - `domains/eval/`：Skill 与 SDK 应用评估的目标解析、完整应用快照、固定用例复用和报告绑定。Creator 可调用其公开入口编排可选 Eval；应用分发只读取内容匹配的评估证据，不依赖模型执行器。
-- `domains/dashboard/`：通过 Eval 的公开入口展示和操作项目评估；目标解析、执行归属、结果判定和基线规则由 `domains/eval/` 维护。
+- `domains/dashboard/`：通过 Eval 的公开入口展示和操作项目评估；评估规则由 `domains/eval/` 维护。通过 `workflow-creation` 和 `workflow-application` 的公开只读入口观测 Creator 与固定应用 Run；存储发现和快照校验复用 SDK，观测不加载应用执行模块或推进流程。
 - `domains/workflow-generation/`：按已确认方案装配 Native、Classic 和独立应用，生成同一组合结果的入口、固定依赖和安装恢复身份；复用领域工厂，不实现另一套状态机。
 - `domains/comet-native/native-application.ts`：公开 Native 扩展工厂，复用原领域状态机并绑定候选审查；Native 可依赖 `workflow-application` 的加载及宿主契约，默认主流程仍不依赖外部 Skill。
 - `domains/comet-classic/classic-application.ts`：公开 Classic 组合工厂，替换执行 Skill 并在领域检查点追加有验收和恢复路径的步骤；沿用 Classic 状态机，SDK Run 保持推进权威。

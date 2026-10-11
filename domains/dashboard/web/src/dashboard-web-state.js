@@ -48,6 +48,8 @@ export async function dashboardResponseError(response) {
       const pluginId = typeof payload.pluginId === 'string' ? payload.pluginId.trim() : '';
       const message = pluginId ? t('插件 {0}：{1}', [pluginId, payload.error]) : payload.error;
       const error = new Error(message);
+      error.status = response.status;
+      if (typeof payload.code === 'string') error.code = payload.code;
       if (pluginId) error.pluginId = pluginId;
       return error;
     }

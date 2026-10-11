@@ -16,6 +16,29 @@ function browser(url = 'http://localhost:4399/') {
 }
 
 describe('Dashboard navigation without URL suffixes', () => {
+  it('preserves the Any run and activation without persisting execution requests', () => {
+    const page = browser();
+    navigateDashboard(
+      {
+        view: 'workflow',
+        workflow: 'any',
+        projectId: 'one',
+        runLocator: 'application:fixed',
+        recordId: 'action:run:2',
+        runTab: 'history',
+        claimToken: 'never-store',
+      },
+      {},
+      page,
+    );
+    expect(readDashboardNavigation(page)).toMatchObject({
+      workflow: 'any',
+      runLocator: 'application:fixed',
+      recordId: 'action:run:2',
+      runTab: 'history',
+    });
+    expect(JSON.stringify(page.history.state)).not.toContain('never-store');
+  });
   it('accepts legacy links and migrates them without removing unrelated options', () => {
     const page = browser('http://localhost:4399/?view=eval&project=project&run=run-one&demo');
     const route = readDashboardNavigation(page);
