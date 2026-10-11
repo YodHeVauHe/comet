@@ -94,7 +94,9 @@ describe('dashboard web source contracts', () => {
     expect(source).toContain("useState(() => (useDemo ? 'classic' : null))");
     expect(source).toContain('pluginSelection || !workflow ? [] : [workflow]');
     expect(source).toContain("workflow === 'classic' ? (");
-    expect(source).toContain('setWorkflow(initialWorkflow.workflow)');
+    expect(source).toContain(
+      'setWorkflow(readDashboardNavigation().workflow ?? initialWorkflow.workflow)',
+    );
   });
 
   it('keeps cached plugin and settings data visible during fresh synchronization', async () => {
@@ -104,7 +106,7 @@ describe('dashboard web source contracts', () => {
     expect(source).toContain('if (!cachedPage) setPluginPage(null)');
     expect(source).toMatch(/else if \(!cached\) \{\s+setSettingsPage\(null\)/u);
     expect(source).not.toContain('message="正在同步最新数据…"');
-    expect(source).toContain('message="最新数据同步失败，当前显示缓存"');
+    expect(source).toContain("message={t('最新数据同步失败，当前显示缓存')}");
     expect(source).toContain('pluginPageCoordinatorRef.current.release');
     expect(source).toContain('projectConfigCoordinatorRef.current.release');
     expect(source).not.toContain('pluginPageCoordinatorRef.current.cancel');
@@ -136,7 +138,7 @@ describe('dashboard web source contracts', () => {
   it('centers the header search within the main workspace without rail compensation', async () => {
     const styles = await readDashboardStyles();
     const desktopHeaderLayout = styles.match(
-      /@media \(min-width: 1024px\)\s*\{[\s\S]*?\.comet-workbench-header\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(260px,\s*420px\)\s+minmax\(0,\s*1fr\);[\s\S]*?}\s*[\s\S]*?\.comet-header-search\s*\{[\s\S]*?grid-column:\s*2;[\s\S]*?position:\s*static;[\s\S]*?max-width:\s*420px;[\s\S]*?}\s*[\s\S]*?\.comet-header-actions\s*\{[\s\S]*?grid-column:\s*3;[\s\S]*?margin-left:\s*0;[\s\S]*?}\s*}/,
+      /@media \(min-width: 1024px\)\s*\{[\s\S]*?\.comet-workbench-header\s*\{[\s\S]*?grid-template-columns:\s*minmax\(180px,\s*1fr\)\s+minmax\(220px,\s*420px\)\s+minmax\(max-content,\s*1fr\);[\s\S]*?}\s*[\s\S]*?\.comet-header-search\s*\{[\s\S]*?grid-column:\s*2;[\s\S]*?position:\s*static;[\s\S]*?max-width:\s*420px;[\s\S]*?}\s*[\s\S]*?\.comet-header-actions\s*\{[\s\S]*?grid-column:\s*3;[\s\S]*?margin-left:\s*0;[\s\S]*?}\s*}/,
     );
 
     expect(desktopHeaderLayout).toBeTruthy();
@@ -167,7 +169,7 @@ describe('dashboard web source contracts', () => {
     expect(page?.[0]).toContain('dashboard-memory-registry');
     expect(page?.[0]).toContain('dashboard-memory-inspector');
     expect(page?.[0]).toContain('适用条件');
-    expect(page?.[0]).toContain("selectedRecord.category || selectedRecord.title || '个人记忆'");
+    expect(page?.[0]).toContain("selectedRecord.category || selectedRecord.title || t('个人记忆')");
     expect(page?.[0]).toContain('为什么应用：');
     expect(page?.[0]).toContain('items={data?.manifestPreview}');
     expect(page?.[0]).toContain('selectedRecord.applicationHistory');
@@ -211,7 +213,7 @@ describe('dashboard web source contracts', () => {
     expect(source).toContain('稳定偏好最多带入');
     expect(source).toContain('当前任务相关记忆最多带入');
     expect(source).toContain('不是记忆条数或存储容量');
-    expect(source).toContain('addonAfter="字符"');
+    expect(source).toContain("addonAfter={t('字符')}");
   });
 
   it('exposes the Project Knowledge registry and bounded management controls', async () => {
@@ -248,7 +250,7 @@ describe('dashboard web source contracts', () => {
     expect(settings?.[0]).toContain('configure-provider');
     expect(settings?.[0]).toContain('Provider 与检索');
     expect(settings?.[0]).toContain('本地索引');
-    expect(settings?.[0]).toContain('aria-label="切换当前项目知识检索"');
+    expect(settings?.[0]).toContain("aria-label={t('切换当前项目知识检索')}");
     expect(settings?.[0]).toContain("action: enabled ? 'enable' : 'disable'");
     expect(settings?.[0]).toContain('保存配置');
     expect(settings?.[0]).toContain("onInvoke('lifecycle', { action: 'uninstall' })");
@@ -266,11 +268,11 @@ describe('dashboard web source contracts', () => {
     expect(page?.[0]).toContain('标记已替代');
     expect(page?.[0]).toContain('仍会保留在历史记录中');
     expect(page?.[0]).toContain("const [stateFilter, setStateFilter] = useState('active')");
-    expect(page?.[0]).toContain("['history', '历史版本']");
+    expect(page?.[0]).toContain("['history', t('历史版本')]");
     expect(page?.[0]).toContain('纠正并恢复');
     expect(page?.[0]).toContain('重新检查来源');
     expect(page?.[0]).toContain('建议补充证据，方便后续维护');
-    expect(source).toContain("capability === 'lifecycle' ? '插件状态已更新' : '操作已完成'");
+    expect(source).toContain("capability === 'lifecycle' ? t('插件状态已更新') : t('操作已完成')");
     expect(styles).toContain('.dashboard-knowledge-registry');
     expect(styles).toMatch(/\.dashboard-knowledge-registry\s*\{[\s\S]*?border: 0;/);
     expect(styles).toContain('.dashboard-knowledge-ledger-row');
@@ -356,7 +358,7 @@ describe('dashboard web source contracts', () => {
     expect(source).toContain('DashboardPortalProvider,');
     expect(source).toContain('useDashboardModalState,');
     expect(source).toContain('<DashboardModal');
-    expect(source).toContain("aria-label={fullscreen ? '退出全屏' : '全屏展示'}");
+    expect(source).toContain("aria-label={fullscreen ? t('退出全屏') : t('全屏展示')}");
     expect(source).toContain('m0 4.5L15 15');
     expect(source).not.toContain('m4.5 4.5L15 15');
     expect(modal).toContain('mask={{ closable: true }}');
@@ -367,9 +369,9 @@ describe('dashboard web source contracts', () => {
     expect(source).toContain('function PersonalMemorySettings');
     expect(source).toContain('function ProjectKnowledgeSettings');
     expect(source).toContain('function CometConfigSettings');
-    expect(source).toContain('aria-label="设置分类"');
+    expect(source).toContain("aria-label={t('设置分类')}");
     expect(source).toContain("label: '项目知识'");
-    expect(source).toContain("label: 'Comet 配置'");
+    expect(source).toContain("label: t('Comet 配置')");
     expect(source).toContain("{ key: 'comet.eval'");
     expect(source).toContain('<EvalSettings readOnly={evalReadOnly} onSaved={onEvalSaved} />');
     expect(source).not.toContain('dashboard-settings-modal-icon');
@@ -418,7 +420,7 @@ describe('dashboard web source contracts', () => {
     expect(source).toContain('collapsedWidth={64}');
     expect(source).toContain('inlineCollapsed={collapsed}');
     expect(source).not.toContain('aria-hidden={collapsed}\n        inert={collapsed}');
-    expect(source).toContain("aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}");
+    expect(source).toContain("aria-label={collapsed ? t('展开侧边栏') : t('收起侧边栏')}");
     expect(source).toContain('className="dashboard-sidebar-group"');
     expect(source).toContain('inlineIndent={12}');
     expect(styles).toContain('.dashboard-sidebar-group + .dashboard-sidebar-group');
@@ -448,7 +450,7 @@ describe('dashboard web source contracts', () => {
 
     expect(source).toContain('className="dashboard-plugin-context-bar"');
     expect(source).not.toContain('title="个人记忆"');
-    expect(source).toContain('aria-label="项目规则状态与操作"');
+    expect(source).toContain("aria-label={t('项目规则状态与操作')}");
     expect(source).not.toContain('<h2>{page.label}</h2>');
     expect(styles).toContain('.dashboard-plugin-context-bar');
     expect(styles).toContain('--dashboard-plugin-body-size: 13px');
@@ -652,7 +654,7 @@ describe('dashboard web source contracts', () => {
 
     expect(source).toContain('useDashboardModalState(Boolean(artifact))');
     expect(source).toContain('dashboard-artifact-preview-expand');
-    expect(source).toContain("aria-label={fullscreen ? '退出全屏' : '全屏展示'}");
+    expect(source).toContain("aria-label={fullscreen ? t('退出全屏') : t('全屏展示')}");
     expect(source).toContain('{fullscreen && toc.length > 0 && (');
     expect(source).not.toContain('{toc.length > 0 && (');
   });
@@ -701,8 +703,8 @@ describe('dashboard web source contracts', () => {
     const source = await readDashboardSource();
 
     expect(source).toContain('break-all font-mono text-xs text-meta');
-    expect(source).toContain('aria-label="复制文件路径"');
-    expect(source).toContain("toast('路径已复制')");
+    expect(source).toContain("aria-label={t('复制文件路径')}");
+    expect(source).toContain("toast(t('路径已复制'))");
     expect(source).not.toContain('truncate font-mono text-xs text-meta');
   });
 

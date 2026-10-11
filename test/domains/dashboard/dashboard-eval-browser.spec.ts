@@ -59,6 +59,80 @@ const run = {
   diagnostics: [],
 };
 test.describe('Dashboard Eval', () => {
+  test('keeps a clean root URL while restoring Eval details on reload and history navigation', async ({
+    page,
+  }) => {
+    await expect(page).toHaveURL('http://127.0.0.1:4173/');
+    await page.getByRole('button', { name: 'writer', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '用例结果' })).toBeVisible();
+    await expect(page).toHaveURL('http://127.0.0.1:4173/');
+    await page.reload();
+    await expect(page.getByRole('tab', { name: '用例结果' })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByText('评估工作台', { exact: true })).toBeVisible();
+    await page.goForward();
+    await expect(page.getByRole('tab', { name: '用例结果' })).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Classic 工作流' }).click();
+    await expect(page.getByRole('heading', { name: '项目概览', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => history.state.cometDashboard.view)).toBe('workflow');
+    await page.goBack();
+    await expect.poll(() => page.evaluate(() => history.state.cometDashboard.view)).toBe('eval');
+    await expect(page.getByRole('tab', { name: '用例结果' })).toBeVisible();
+    await expect(page).toHaveURL('http://127.0.0.1:4173/');
+  });
+  test('opens bookmarked Eval links and clears their visible query parameters', async ({
+    page,
+  }) => {
+    await page.goto('/?view=eval&project=project&run=eval-one');
+    await expect(page.getByRole('tab', { name: '用例结果' })).toBeVisible();
+    await expect(page).toHaveURL('http://127.0.0.1:4173/');
+    await page.reload();
+    await expect(page.getByRole('tab', { name: '用例结果' })).toBeVisible();
+  });
+  test('lets the Eval settings heading scroll and translates inherited setting names', async ({
+    page,
+  }) => {
+    await page.route('**/api/dashboard/eval/settings', (route) =>
+      route.fulfill({
+        json: {
+          path: '/fixture/.comet/eval/.env',
+          revision: 'initial',
+          defaults: {
+            agent: 'claude-code',
+            model: '',
+            baseUrl: '',
+            judgeEnabled: false,
+            judgeAgent: 'claude-code',
+            judgeModel: '',
+            judgeBaseUrl: '',
+            skillTimeoutSeconds: 600,
+            skillMaxTurns: 40,
+            applicationTimeoutSeconds: 1200,
+            applicationMaxTurns: 8,
+          },
+          credentials: {
+            main: { configured: false, saved: false, source: 'none', kind: 'api-key' },
+            judge: { configured: true, saved: false, source: 'environment', kind: 'auth-token' },
+          },
+          overrides: ['Judge 凭据'],
+        },
+      }),
+    );
+    await page.locator('.comet-language-switch').getByText('EN', { exact: true }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: /Comet settings/u });
+    const heading = dialog.locator('.dashboard-eval-settings > .dashboard-eval-heading');
+    await expect(heading).toHaveCSS('position', 'static');
+    const before = await heading.boundingBox();
+    const budget = dialog.getByLabel('SDK application default maximum turns', { exact: true });
+    await budget.scrollIntoViewIfNeeded();
+    await expect.poll(async () => (await heading.boundingBox())!.y).toBeLessThan(before!.y - 30);
+    await expect(
+      dialog.getByText(/Provided by the Dashboard startup environment: Judge credentials/u),
+    ).toBeVisible();
+    expect(await dialog.innerText()).not.toContain('Judge 凭据');
+    await page.screenshot({ path: test.info().outputPath('eval-settings-scroll-english.png') });
+  });
   test.beforeEach(async ({ page }) => {
     await page.route('**/api/dashboard/**', async (route) => {
       const url = new URL(route.request().url());
@@ -116,6 +190,55 @@ test.describe('Dashboard Eval', () => {
     await page.getByRole('tab', { name: '日志与产物' }).click();
     await page.getByRole('button', { name: 'summary.md', exact: true }).click();
     await expect(page.getByText('Real report', { exact: true })).toBeVisible();
+  });
+  test('localizes Eval controls while preserving case evidence and report content', async ({
+    page,
+  }) => {
+    await page.locator('.comet-language-switch').getByText('EN', { exact: true }).click();
+    await expect(page.getByText('Evaluation workspace', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'writer', exact: true }).click();
+    await expect(page.getByRole('tab', { name: 'Case results' })).toBeVisible();
+    await page.getByRole('tab', { name: 'Case results' }).click();
+    await page.getByRole('button', { name: 'clarify', exact: true }).click();
+    const evidence = page.getByRole('dialog', { name: 'clarify', exact: true });
+    await expect(evidence.getByText('Final response', { exact: true })).toBeVisible();
+    await expect(evidence.getByText('缺少数据源的周报请求', { exact: true })).toBeVisible();
+    await expect(evidence.getByText('生成了没有来源的周报', { exact: true })).toBeVisible();
+    await expect(evidence.getByText('必须先澄清', { exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.route('**/eval/runs/eval-one/artifact?*', (route) =>
+      route.fulfill({ json: { content: '# 原始报告\n\n中文报告正文', format: 'markdown' } }),
+    );
+    await page.getByRole('button', { name: 'Preview Markdown', exact: true }).click();
+    const report = page.getByRole('dialog', { name: 'summary.md', exact: true });
+    await expect(report.getByRole('heading', { name: '原始报告', exact: true })).toBeVisible();
+    await expect(report.getByText('中文报告正文', { exact: true })).toBeVisible();
+    await expect(report.getByRole('button', { name: 'Download file' })).toBeVisible();
+  });
+  test('keeps Eval form input and current step when the interface language changes', async ({
+    page,
+  }) => {
+    await page.getByRole('button', { name: /新建评估/u }).click();
+    const target = 'D:/Projects/用户应用/SKILL.md';
+    const goal = '保留用户填写的评估目的';
+    await page.getByRole('button', { name: '下一步', exact: true }).click();
+    await expect(
+      page.locator('#target_help').getByText('请选择本地目标路径', { exact: true }),
+    ).toBeVisible();
+    await page.locator('.comet-language-switch').getByText('EN', { exact: true }).click();
+    await expect(
+      page.locator('#target_help').getByText('Select a local target path', { exact: true }),
+    ).toBeVisible();
+    await page.locator('.comet-language-switch').getByText('中文', { exact: true }).click();
+    await page.getByLabel('目标路径', { exact: true }).fill(target);
+    await page.getByLabel('评估目的（记录备注）', { exact: true }).fill(goal);
+    await page.locator('.comet-language-switch').getByText('EN', { exact: true }).click();
+    await expect(page.getByLabel('Target path', { exact: true })).toHaveValue(target);
+    await expect(page.getByLabel('Evaluation purpose (notes)', { exact: true })).toHaveValue(goal);
+    await expect(page.getByText('Target and snapshot', { exact: true })).toBeVisible();
+    await page.locator('.comet-language-switch').getByText('中文', { exact: true }).click();
+    await expect(page.getByLabel('目标路径', { exact: true })).toHaveValue(target);
+    await expect(page.getByLabel('评估目的（记录备注）', { exact: true })).toHaveValue(goal);
   });
   test('filters failed and infrastructure cases separately and searches their inputs', async ({
     page,
@@ -547,7 +670,7 @@ test.describe('Dashboard Eval', () => {
     await page.getByLabel('目标路径').fill('application.json');
     await page.getByRole('button', { name: '保存为新配置' }).click();
     await page.getByLabel('配置名称').fill('日常回归');
-    await page.getByRole('button', { name: 'OK', exact: true }).click();
+    await page.getByRole('button', { name: /确\s*定/u }).click();
     await expect(page.getByText('常用配置已保存', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '返回记录', exact: true }).click();
     await page.reload();

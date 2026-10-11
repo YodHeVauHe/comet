@@ -1,3 +1,5 @@
+import { t } from './dashboard-i18n.js';
+import { useDashboardLanguage } from './dashboard-language.jsx';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Button, Modal, Tooltip } from 'antd';
 import { FullscreenExitOutlined, FullscreenOutlined } from '@ant-design/icons';
@@ -5,6 +7,7 @@ import { FullscreenExitOutlined, FullscreenOutlined } from '@ant-design/icons';
 const DashboardPortalContext = createContext(null);
 
 export function DashboardPortalProvider({ container, children }) {
+  useDashboardLanguage();
   return (
     <DashboardPortalContext.Provider value={container}>{children}</DashboardPortalContext.Provider>
   );
@@ -41,6 +44,7 @@ export function useDashboardModalState(open) {
 }
 
 function DashboardModalTitle({ title, subtitle, description, fullscreen, onToggleFullscreen }) {
+  useDashboardLanguage();
   return (
     <div className="dashboard-modal-title dashboard-settings-modal-title">
       <div className="dashboard-modal-title-copy dashboard-settings-modal-title-copy">
@@ -52,12 +56,12 @@ function DashboardModalTitle({ title, subtitle, description, fullscreen, onToggl
           {description && <p>{description}</p>}
         </div>
       </div>
-      <Tooltip title={fullscreen ? '退出全屏' : '全屏展示'} placement="bottom">
+      <Tooltip title={fullscreen ? t('退出全屏') : t('全屏展示')} placement="bottom">
         <Button
           className="dashboard-modal-expand dashboard-settings-modal-expand"
           type="text"
           icon={fullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
-          aria-label={fullscreen ? '退出全屏' : '全屏展示'}
+          aria-label={fullscreen ? t('退出全屏') : t('全屏展示')}
           aria-pressed={fullscreen}
           onClick={onToggleFullscreen}
         />
@@ -80,6 +84,7 @@ export function DashboardModal({
   children,
   ...modalProps
 }) {
+  useDashboardLanguage();
   const portalContainer = useContext(DashboardPortalContext);
   const { fullscreen, toggleFullscreen, requestClose } = useDashboardModalState(open);
   const modalClassName = ['dashboard-modal', className, fullscreen ? 'is-fullscreen' : '']

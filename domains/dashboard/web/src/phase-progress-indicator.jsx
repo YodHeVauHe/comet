@@ -1,3 +1,5 @@
+import { t } from './dashboard-i18n.js';
+import { useDashboardLanguage } from './dashboard-language.jsx';
 import React from 'react';
 
 const ORIGIN_WAVE_DOTS = Array.from({ length: 25 }, (_, index) => {
@@ -12,8 +14,13 @@ const ORIGIN_WAVE_DOTS = Array.from({ length: 25 }, (_, index) => {
 });
 
 function PhaseOriginWave({ label }) {
+  useDashboardLanguage();
   return (
-    <span className="dashboard-phase-origin-wave" role="status" aria-label={`${label} 正在进行`}>
+    <span
+      className="dashboard-phase-origin-wave"
+      role="status"
+      aria-label={t('{0} 正在进行', [label])}
+    >
       {ORIGIN_WAVE_DOTS.map((dot) => (
         <span
           key={dot.index}
@@ -36,6 +43,7 @@ export function WorkflowPhaseTrack({
   currentPhaseRunning = true,
   ariaLabel,
 }) {
+  useDashboardLanguage();
   return (
     <div className="dashboard-phase-track" role="list" aria-label={ariaLabel}>
       {phases.map(([key, label], index) => {
@@ -47,12 +55,12 @@ export function WorkflowPhaseTrack({
               : 'pending';
         const stateLabel =
           state === 'done'
-            ? '已完成'
+            ? t('已完成')
             : state === 'current' && currentPhaseRunning
-              ? '正在进行'
+              ? t('正在进行')
               : state === 'current'
-                ? '当前阶段'
-                : '待进行';
+                ? t('当前阶段')
+                : t('待进行');
         return (
           <div
             key={key}

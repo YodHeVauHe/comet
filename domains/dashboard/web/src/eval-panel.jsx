@@ -1,3 +1,6 @@
+import { navigateDashboard, useDashboardNavigation } from './dashboard-navigation.js';
+import { t, localized } from './dashboard-i18n.js';
+import { useDashboardLanguage, useDashboardFormLanguage } from './dashboard-language.jsx';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -63,7 +66,7 @@ import {
 
 const { Text, Title, Paragraph } = Typography;
 const terminal = (status) => ['completed', 'stopped', 'interrupted', 'unknown'].includes(status);
-const executionLabels = {
+const executionLabels = localized({
   queued: '等待执行',
   preparing: '准备环境',
   generating: '生成用例',
@@ -75,8 +78,8 @@ const executionLabels = {
   stopped: '已停止',
   interrupted: '异常中断',
   unknown: '历史记录',
-};
-const sourceLabels = {
+});
+const sourceLabels = localized({
   authored: '手写用例',
   recommended: '推荐用例',
   'generated-cache': '生成缓存',
@@ -84,7 +87,7 @@ const sourceLabels = {
   'fixed-reuse': '复用固定用例',
   quick: '快速冒烟',
   explicit: '指定用例',
-};
+});
 async function requestJson(base, suffix, { signal, body } = {}) {
   const response = await fetch(base + suffix, {
     signal,
@@ -98,16 +101,11 @@ async function requestJson(base, suffix, { signal, body } = {}) {
   });
   const data = await response.json();
   if (!response.ok)
-    throw Object.assign(new Error(data.error || 'Eval 请求失败'), { status: response.status });
+    throw Object.assign(new Error(data.error || t('Eval 请求失败')), { status: response.status });
   return data;
 }
-function locationFor(projectId, runId) {
-  const url = new URL(window.location.href);
-  url.searchParams.set('view', 'eval');
-  url.searchParams.set('project', projectId);
-  if (runId) url.searchParams.set('run', runId);
-  else url.searchParams.delete('run');
-  window.history.replaceState({}, '', url);
+function locationFor(projectId, runId, mode = 'list') {
+  navigateDashboard({ view: 'eval', projectId, runId, mode });
 }
 function saveArtifact(value, filename) {
   const types = {
@@ -128,6 +126,7 @@ function saveArtifact(value, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function RunStatus({ run }) {
+  useDashboardLanguage();
   return (
     <Space size={5} wrap>
       <Tag color={terminal(run.executionStatus) ? 'default' : 'processing'}>
@@ -146,11 +145,12 @@ function RunStatus({ run }) {
           {conclusionLabels[run.conclusion]}
         </Tag>
       )}
-      {run.config?.retrySourceRunId && <Tag color="blue">失败重跑</Tag>}
+      {run.config?.retrySourceRunId && <Tag color="blue">{t('失败重跑')}</Tag>}
     </Space>
   );
 }
 function EvalMarkdown({ content }) {
+  useDashboardLanguage();
   const [html, setHtml] = useState('');
   useEffect(() => {
     let cancelled = false;
@@ -172,17 +172,17 @@ export function EvalPanel({
   refreshToken = 0,
   onSettings,
 }) {
+  useDashboardLanguage();
+  const navigation = useDashboardNavigation();
   const base = `/api/dashboard/projects/${encodeURIComponent(projectId)}/eval`;
   const { message, modal } = App.useApp();
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [mode, setMode] = useState(() =>
-    new URLSearchParams(window.location.search).get('run') ? 'detail' : 'list',
+    navigation.runId ? 'detail' : navigation.mode === 'new' ? 'new' : 'list',
   );
-  const [selectedId, setSelectedId] = useState(() =>
-    new URLSearchParams(window.location.search).get('run'),
-  );
+  const [selectedId, setSelectedId] = useState(() => navigation.runId);
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [tab, setTab] = useState('overview');
@@ -257,6 +257,21 @@ export function EvalPanel({
   useEffect(() => {
     if (refreshToken) void refresh(true);
   }, [refreshToken, refresh]);
+  useEffect(() => {
+    if (navigation.view !== 'eval' || (navigation.projectId && navigation.projectId !== projectId))
+      return;
+    const runId = navigation.runId;
+    if (selectedRef.current !== runId) {
+      selectedRef.current = runId;
+      setSelectedId(runId);
+      setDetail(null);
+      setComparison(null);
+      setCaseDetail(null);
+      setArtifact(null);
+      if (runId) void refresh();
+    }
+    setMode(runId ? 'detail' : navigation.mode === 'new' ? 'new' : 'list');
+  }, [navigation, projectId, refresh]);
   const openRun = async (run) => {
     setSelectedId(run.id);
     selectedRef.current = run.id;
@@ -289,7 +304,7 @@ export function EvalPanel({
     setMode('new');
     setSelectedId(null);
     selectedRef.current = null;
-    locationFor(projectId, null);
+    locationFor(projectId, null, 'new');
   };
   const setBaseline = async (run) => {
     const apply = async () => {
@@ -308,20 +323,26 @@ export function EvalPanel({
         ),
       );
       if (selectedRef.current === run.id) setDetail(updated);
-      message.success('默认基线已设置');
+      message.success(t('默认基线已设置'));
     };
     if (run.baselineRunId && run.baselineRunId !== run.id) {
       modal.confirm({
-        title: '替换默认基线？',
+        title: t('替换默认基线？'),
         content: (
           <Space direction="vertical">
-            <Text>原基线：{run.baselineRunId}</Text>
-            <Text>新基线：{run.id}</Text>
-            <Text type="secondary">保留历史结果及启动时绑定的参照。</Text>
+            <Text>
+              {t('原基线：')}
+              {run.baselineRunId}
+            </Text>
+            <Text>
+              {t('新基线：')}
+              {run.id}
+            </Text>
+            <Text type="secondary">{t('保留历史结果及启动时绑定的参照。')}</Text>
           </Space>
         ),
-        okText: '确认替换',
-        cancelText: '取消',
+        okText: t('确认替换'),
+        cancelText: t('取消'),
         onOk: async () => {
           try {
             await apply();
@@ -341,11 +362,12 @@ export function EvalPanel({
   };
   const clearBaseline = (run) =>
     modal.confirm({
-      title: '取消默认基线？',
-      content:
+      title: t('取消默认基线？'),
+      content: t(
         '仅取消当前目标和固定用例集的默认基线。历史结果、其他用例集的基线，以及运行启动时绑定的参照均保留。',
-      okText: '取消基线',
-      cancelText: '保留基线',
+      ),
+      okText: t('取消基线'),
+      cancelText: t('保留基线'),
       onOk: async () => {
         try {
           const updated = await requestJson(
@@ -362,7 +384,7 @@ export function EvalPanel({
             ),
           );
           if (selectedRef.current === run.id) setDetail(updated);
-          message.success('默认基线已取消');
+          message.success(t('默认基线已取消'));
         } catch (err) {
           message.error(err.message);
           void refresh(true);
@@ -377,7 +399,7 @@ export function EvalPanel({
       setDetail(
         await requestJson(base, `/runs/${encodeURIComponent(detail.id)}/stop`, { body: {} }),
       );
-      message.info('停止请求已提交，正在核对进程与容器');
+      message.info(t('停止请求已提交，正在核对进程与容器'));
     } catch (err) {
       message.error(err.message);
     } finally {
@@ -513,27 +535,27 @@ export function EvalPanel({
     run.isBaseline ? (
       <Space size={4} wrap>
         <Tag icon={<FlagOutlined />} color="blue">
-          默认基线
+          {t('默认基线')}
         </Tag>
         <Button size="small" type="text" onClick={() => clearBaseline(run)} disabled={readOnly}>
-          取消基线
+          {t('取消基线')}
         </Button>
       </Space>
     ) : !run.baselineEligible ? (
-      <Tooltip title={run.baselineDisabledReason}>
+      <Tooltip title={t(run.baselineDisabledReason)}>
         <Button
           type="text"
           size="small"
           className="dashboard-eval-unavailable"
           icon={<InfoCircleOutlined />}
-          aria-label={`基线不可用：${run.baselineDisabledReason}`}
+          aria-label={t('基线不可用：{0}', [t(run.baselineDisabledReason)])}
         >
-          不可设为基线
+          {t('不可设为基线')}
         </Button>
       </Tooltip>
     ) : (
       <Button size="small" onClick={() => void setBaseline(run)} disabled={readOnly}>
-        {run.baselineRunId ? '替换默认基线' : '设为基线'}
+        {run.baselineRunId ? t('替换默认基线') : t('设为基线')}
       </Button>
     );
   const filtered = runs.filter((run) =>
@@ -549,18 +571,18 @@ export function EvalPanel({
     <div className="dashboard-eval-stack">
       <div className="dashboard-eval-heading dashboard-eval-masthead">
         <div>
-          <Text className="dashboard-eval-eyebrow">EVAL / 项目评估</Text>
+          <Text className="dashboard-eval-eyebrow">{t('EVAL / 项目评估')}</Text>
           <Title level={3} className="dashboard-eval-title">
-            评估工作台
+            {t('评估工作台')}
           </Title>
-          <Text type="secondary">当前项目的评估运行与固定用例结果</Text>
+          <Text type="secondary">{t('当前项目的评估运行与固定用例结果')}</Text>
         </div>
         <Space wrap>
           <Button type="text" onClick={() => setGuideOpen(true)}>
-            使用指南
+            {t('使用指南')}
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => void refresh(true)} loading={loading}>
-            刷新
+            {t('刷新')}
           </Button>
           <Button
             type="primary"
@@ -568,24 +590,24 @@ export function EvalPanel({
             onClick={() => newRun()}
             disabled={readOnly}
           >
-            新建评估
+            {t('新建评估')}
           </Button>
         </Space>
       </div>
-      <div className="dashboard-eval-summary-band" aria-label="评估记录统计">
-        <Metric label="运行记录" value={runs.length} />
+      <div className="dashboard-eval-summary-band" aria-label={t('评估记录统计')}>
+        <Metric label={t('运行记录')} value={runs.length} />
         <Metric
-          label="进行中"
+          label={t('进行中')}
           value={runs.filter((run) => !terminal(run.executionStatus)).length}
         />
         <Metric
-          label="已结束 / 历史"
+          label={t('已结束 / 历史')}
           value={runs.filter((run) => terminal(run.executionStatus)).length}
         />
         <Metric
-          label="基线组"
+          label={t('基线组')}
           value={runs.filter((run) => run.isBaseline).length}
-          detail="每套固定用例最多一个"
+          detail={t('每套固定用例最多一个')}
         />
       </div>
       {!readOnly && (
@@ -593,30 +615,34 @@ export function EvalPanel({
       )}
       <div className="dashboard-eval-heading dashboard-eval-list-toolbar">
         <Segmented
-          aria-label="运行筛选"
+          aria-label={t('运行筛选')}
           value={runFilter}
           onChange={setRunFilter}
           options={[
-            { value: 'all', label: '全部记录' },
-            { value: 'active', label: '进行中' },
-            { value: 'finished', label: '已结束' },
-            { value: 'baseline', label: '仅看基线' },
+            { value: 'all', label: t('全部记录') },
+            { value: 'active', label: t('进行中') },
+            { value: 'finished', label: t('已结束') },
+            { value: 'baseline', label: t('仅看基线') },
           ]}
         />
-        <Tooltip title="同一目标、固定用例与评分规则最多一个默认基线。完整但未通过的结果也可设置；可以替换或取消，历史证据保留。">
+        <Tooltip
+          title={t(
+            '同一目标、固定用例与评分规则最多一个默认基线。完整但未通过的结果也可设置；可以替换或取消，历史证据保留。',
+          )}
+        >
           <Button type="text" size="small" icon={<InfoCircleOutlined />}>
-            基线规则
+            {t('基线规则')}
           </Button>
         </Tooltip>
       </div>
       {!loading && runs.length === 0 && <EvalFirstUse />}
       {!loading && !filtered.length ? (
-        <Empty description={runs.length ? '没有符合筛选条件的记录' : '暂无评估记录'}>
+        <Empty description={runs.length ? t('没有符合筛选条件的记录') : t('暂无评估记录')}>
           <Paragraph type="secondary">
-            选择本地 Skill 或 SDK 应用，预检通过后开始第一次评估。
+            {t('选择本地 Skill 或 SDK 应用，预检通过后开始第一次评估。')}
           </Paragraph>
           <Button type="primary" onClick={() => newRun()}>
-            新建评估
+            {t('新建评估')}
           </Button>
         </Empty>
       ) : (
@@ -629,7 +655,7 @@ export function EvalPanel({
           size="small"
           columns={[
             {
-              title: '目标 / 运行',
+              title: t('目标 / 运行'),
               key: 'target',
               onCell: (run) => ({
                 className: 'dashboard-eval-target-cell',
@@ -649,32 +675,33 @@ export function EvalPanel({
                     <span className="dashboard-eval-target-name">{run.target.name}</span>
                     <span className="dashboard-eval-secondary">
                       {run.target.version ?? '—'} ·{' '}
-                      {run.origin === 'dashboard' ? 'Dashboard' : 'CLI / 历史'}
+                      {run.origin === 'dashboard' ? 'Dashboard' : t('CLI / 历史')}
                     </span>
                     <span className="dashboard-eval-secondary dashboard-eval-run-id" title={run.id}>
                       {run.id}
                     </span>
                   </span>
                   <span className="dashboard-eval-target-cta" aria-hidden="true">
-                    查看详情 <RightOutlined />
+                    {t('查看详情 ')}
+                    <RightOutlined />
                   </span>
                 </Button>
               ),
             },
-            { title: '状态', key: 'status', render: (_, run) => <RunStatus run={run} /> },
+            { title: t('状态'), key: 'status', render: (_, run) => <RunStatus run={run} /> },
             {
-              title: '通过用例',
+              title: t('通过用例'),
               key: 'passed',
               render: (_, run) => (
                 <span className="dashboard-eval-numeric">
                   {run.passed} / {run.expectedTotal ?? run.total}
                   <br />
-                  <Text type="secondary">{numeric(run.metrics.durationSeconds, ' 秒')}</Text>
+                  <Text type="secondary">{numeric(run.metrics.durationSeconds, t(' 秒'))}</Text>
                 </span>
               ),
             },
             {
-              title: '模型',
+              title: t('模型'),
               key: 'model',
               responsive: ['lg'],
               render: (_, run) => (
@@ -685,7 +712,7 @@ export function EvalPanel({
                 </span>
               ),
             },
-            { title: '基线', key: 'baseline', render: (_, run) => baselineControl(run) },
+            { title: t('基线'), key: 'baseline', render: (_, run) => baselineControl(run) },
           ]}
         />
       )}
@@ -702,7 +729,7 @@ export function EvalPanel({
     : [];
   const defaultReference = detail?.boundBaselineRunId || detail?.baselineRunId;
   return (
-    <section className="dashboard-eval-page" aria-label="Eval 工作台">
+    <section className="dashboard-eval-page" aria-label={t('Eval 工作台')}>
       <EvalGuideDrawer
         open={guideOpen}
         onClose={() => setGuideOpen(false)}
@@ -716,7 +743,7 @@ export function EvalPanel({
           closable
           type="error"
           showIcon
-          message="Eval 数据读取失败"
+          message={t('Eval 数据读取失败')}
           description={
             <>
               <Paragraph>{evalDisplayError(error)}</Paragraph>
@@ -725,14 +752,14 @@ export function EvalPanel({
           }
           action={
             <Button size="small" onClick={() => void refresh(true)}>
-              重试
+              {t('重试')}
             </Button>
           }
           onClose={() => setError(null)}
         />
       )}
       {readOnly ? (
-        <Empty description="Eval 操作仅在本地 Dashboard 中提供" />
+        <Empty description={t('Eval 操作仅在本地 Dashboard 中提供')} />
       ) : mode === 'new' ? (
         <EvalCreate
           base={base}
@@ -752,7 +779,7 @@ export function EvalPanel({
       ) : mode === 'list' ? (
         list
       ) : !detail ? (
-        <Spin tip="读取评估记录…" />
+        <Spin tip={t('读取评估记录…')} />
       ) : mode === 'compare' ? (
         <div className="dashboard-eval-stack">
           <Button
@@ -760,12 +787,12 @@ export function EvalPanel({
             icon={<ArrowLeftOutlined />}
             onClick={() => setMode('detail')}
           >
-            返回详情
+            {t('返回详情')}
           </Button>
-          <Title level={3}>与基线对比</Title>
-          <Text type="secondary">临时参照只影响当前查看，不修改默认基线。</Text>
+          <Title level={3}>{t('与基线对比')}</Title>
+          <Text type="secondary">{t('临时参照只影响当前查看，不修改默认基线。')}</Text>
           <Select
-            aria-label="临时参照"
+            aria-label={t('临时参照')}
             value={baselineId ?? undefined}
             options={candidates.map((run) => ({
               value: run.id,
@@ -780,7 +807,7 @@ export function EvalPanel({
         <div className="dashboard-eval-stack dashboard-eval-detail">
           <div className="dashboard-eval-heading dashboard-eval-breadcrumb">
             <Button type="text" icon={<ArrowLeftOutlined />} onClick={back}>
-              运行记录
+              {t('运行记录')}
             </Button>
             <Text type="secondary" className="dashboard-eval-run-id" title={detail.id}>
               {detail.id}
@@ -792,8 +819,8 @@ export function EvalPanel({
                 {detail.target.name}
               </Title>
               <Text type="secondary">
-                {detail.target.version ?? '无版本信息'} ·{' '}
-                {detail.target.type === 'application' ? 'SDK 应用' : 'Skill'}
+                {detail.target.version ?? t('无版本信息')} ·{' '}
+                {detail.target.type === 'application' ? t('SDK 应用') : 'Skill'}
               </Text>
             </div>
             <RunStatus run={detail} />
@@ -803,21 +830,24 @@ export function EvalPanel({
             <Alert
               type="info"
               showIcon
-              message="本次仅重跑失败用例"
-              description={`原记录：${detail.config.retrySourceRunId}。本次通过不代表完整用例集通过，不能替换完整基线或 SDK 应用验收。`}
+              message={t('本次仅重跑失败用例')}
+              description={t(
+                '原记录：{0}。本次通过不代表完整用例集通过，不能替换完整基线或 SDK 应用验收。',
+                [detail.config.retrySourceRunId],
+              )}
             />
           )}
           {detail.executionStatus === 'stopping' && (
             <Alert
               type="warning"
               showIcon
-              message="正在核对进程与实验容器是否停止，现有结果将保留"
+              message={t('正在核对进程与实验容器是否停止，现有结果将保留')}
             />
           )}
           {detail.failures?.length > 0 && (
             <Alert
               type="warning"
-              message="评估限制或执行问题"
+              message={t('评估限制或执行问题')}
               description={detail.failures.join('\n')}
               showIcon
             />
@@ -825,8 +855,8 @@ export function EvalPanel({
           {detail.diagnostics?.length > 0 && (
             <Alert
               type="warning"
-              message="部分产物不可读取"
-              description={detail.diagnostics.join('\n')}
+              message={t('部分产物不可读取')}
+              description={detail.diagnostics.map((item) => t(item)).join('\n')}
             />
           )}
           <Space wrap className="dashboard-eval-actions">
@@ -837,18 +867,18 @@ export function EvalPanel({
                 onClick={() => void stop()}
                 disabled={detail.executionStatus === 'stopping'}
               >
-                停止评估
+                {t('停止评估')}
               </Button>
             )}
             {detail.availableActions.rerun && (
               <Button type="primary" loading={busy} onClick={() => void rerun()}>
-                修改配置后重新评估
+                {t('修改配置后重新评估')}
               </Button>
             )}
             {detail.availableActions.rerun &&
               detail.cases?.some((item) => item.passed === false) && (
                 <Button loading={busy} onClick={() => void rerun(true)}>
-                  只重跑失败用例
+                  {t('只重跑失败用例')}
                 </Button>
               )}
             {detail.availableActions.compare && (
@@ -863,36 +893,38 @@ export function EvalPanel({
                   }
                 }}
               >
-                与基线对比
+                {t('与基线对比')}
               </Button>
             )}
             <Button type="text" onClick={() => setGuideOpen(true)}>
-              使用指南
+              {t('使用指南')}
             </Button>
             <Button type="text" onClick={() => void refresh(true)} icon={<ReloadOutlined />}>
-              刷新状态
+              {t('刷新状态')}
             </Button>
           </Space>
           <div className="dashboard-eval-context-strip">
             <div className="dashboard-eval-context-section">
               <div className="dashboard-eval-heading">
                 <Text className="dashboard-eval-section-label">
-                  <FlagOutlined /> 默认参照
+                  <FlagOutlined />
+                  {t(' 默认参照')}
                 </Text>
                 <Space size={4}>
                   {baselineControl(detail)}
-                  <Tooltip title="同一目标与固定用例集最多一个，可替换或取消。">
+                  <Tooltip title={t('同一目标与固定用例集最多一个，可替换或取消。')}>
                     <Button
                       type="text"
                       size="small"
                       icon={<InfoCircleOutlined />}
-                      aria-label="基线规则"
+                      aria-label={t('基线规则')}
                     />
                   </Tooltip>
                 </Space>
               </div>
               <Text className="dashboard-eval-context-id" title={detail.baselineRunId ?? ''}>
-                默认基线：{detail.baselineRunId ?? '未设置'}
+                {t('默认基线：')}
+                {detail.baselineRunId ?? t('未设置')}
               </Text>
               {detail.boundBaselineRunId && (
                 <Text
@@ -900,13 +932,15 @@ export function EvalPanel({
                   className="dashboard-eval-context-id"
                   title={detail.boundBaselineRunId}
                 >
-                  启动时绑定：{detail.boundBaselineRunId}
+                  {t('启动时绑定：')}
+                  {detail.boundBaselineRunId}
                 </Text>
               )}
             </div>
             <div className="dashboard-eval-context-section">
               <Text className="dashboard-eval-section-label">
-                <FileTextOutlined /> 评估报告
+                <FileTextOutlined />
+                {t(' 评估报告')}
               </Text>
               <Space direction="vertical" size="small">
                 <Space wrap>
@@ -916,16 +950,17 @@ export function EvalPanel({
                   ].map(([id, label]) => (
                     <Space.Compact key={id}>
                       <Button
-                        aria-label={`预览 ${label}`}
+                        aria-label={t('预览 {0}', [label])}
                         icon={<EyeOutlined />}
                         disabled={!detail.artifacts?.some((item) => item.id === id)}
                         onClick={() => void openArtifact(id)}
                       >
-                        预览 {label}
+                        {t('预览 ')}
+                        {label}
                       </Button>
-                      <Tooltip title={`下载 ${label}`}>
+                      <Tooltip title={t('下载 {0}', [label])}>
                         <Button
-                          aria-label={`下载 ${label}`}
+                          aria-label={t('下载 {0}', [label])}
                           icon={<DownloadOutlined />}
                           disabled={!detail.artifacts?.some((item) => item.id === id)}
                           loading={downloads.includes(`${detail.id}/${id}`)}
@@ -939,10 +974,10 @@ export function EvalPanel({
                   {detail.artifacts?.some((item) =>
                     ['summary.md', 'summary.html'].includes(item.id),
                   )
-                    ? '可直接预览或下载已生成的报告，其他文件在「日志与产物」中查看。'
+                    ? t('可直接预览或下载已生成的报告，其他文件在「日志与产物」中查看。')
                     : terminal(detail.executionStatus)
-                      ? '本次运行未生成报告，可在「日志与产物」中查看执行日志。'
-                      : '报告生成后即可预览或下载，页面会自动更新。'}
+                      ? t('本次运行未生成报告，可在「日志与产物」中查看执行日志。')
+                      : t('报告生成后即可预览或下载，页面会自动更新。')}
                 </Text>
               </Space>
             </div>
@@ -953,24 +988,24 @@ export function EvalPanel({
               activeKey={tab}
               onChange={setTab}
               items={[
-                { key: 'overview', label: '结果概览', children: <EvalOverview run={detail} /> },
+                { key: 'overview', label: t('结果概览'), children: <EvalOverview run={detail} /> },
                 {
                   key: 'cases',
-                  label: '用例结果',
+                  label: t('用例结果'),
                   children: <EvalCases run={detail} onSelect={setCaseDetail} />,
                 },
                 ...(detail.target.type === 'application'
                   ? [
                       {
                         key: 'coverage',
-                        label: 'SDK 覆盖',
+                        label: t('SDK 覆盖'),
                         children: <EvalCoverage run={detail} />,
                       },
                     ]
                   : []),
                 {
                   key: 'logs',
-                  label: '日志与产物',
+                  label: t('日志与产物'),
                   children: (
                     <EvalArtifacts
                       run={detail}
@@ -980,7 +1015,11 @@ export function EvalPanel({
                     />
                   ),
                 },
-                { key: 'config', label: '执行配置', children: <EvalConfiguration run={detail} /> },
+                {
+                  key: 'config',
+                  label: t('执行配置'),
+                  children: <EvalConfiguration run={detail} />,
+                },
               ]}
             />
           </Spin>
@@ -989,7 +1028,7 @@ export function EvalPanel({
       <Drawer
         open={!!caseDetail}
         onClose={() => setCaseDetail(null)}
-        title={caseDetail?.task ?? '用例详情'}
+        title={caseDetail?.task ?? t('用例详情')}
         width={960}
         rootClassName="dashboard-eval-drawer"
         destroyOnHidden
@@ -1008,7 +1047,7 @@ export function EvalPanel({
           artifactRequest.current?.abort();
           setArtifact(null);
         }}
-        title={artifact?.label ?? '报告预览'}
+        title={artifact?.label ?? t('报告预览')}
         width={900}
         rootClassName={`dashboard-eval-drawer dashboard-eval-artifact-drawer${artifact?.format === 'html' ? ' dashboard-eval-html-drawer' : ''}`}
         destroyOnHidden
@@ -1016,9 +1055,9 @@ export function EvalPanel({
           <Space size={12} wrap>
             {artifact?.label === 'execution.log' && (
               <Space size={6}>
-                <Text type="secondary">跟随最新</Text>
+                <Text type="secondary">{t('跟随最新')}</Text>
                 <Switch
-                  aria-label="跟随最新日志"
+                  aria-label={t('跟随最新日志')}
                   size="small"
                   checked={followLog}
                   onChange={setFollowLog}
@@ -1034,7 +1073,7 @@ export function EvalPanel({
                   : saveArtifact(artifact, `${artifact.runId}-${artifact.label.split('/').pop()}`)
               }
             >
-              下载文件
+              {t('下载文件')}
             </Button>
           </Space>
         }
@@ -1042,9 +1081,9 @@ export function EvalPanel({
         {artifact?.label === 'execution.log' && (
           <Paragraph type="secondary">
             {artifact.truncated
-              ? '显示最近 256 KB 日志，下载可获取完整文件。'
-              : '运行期间自动更新日志。'}
-            {logError && `更新失败：${logError}`}
+              ? t('显示最近 256 KB 日志，下载可获取完整文件。')
+              : t('运行期间自动更新日志。')}
+            {logError && t('更新失败：{0}', [logError])}
           </Paragraph>
         )}
         <Spin spinning={artifactLoading}>
@@ -1052,7 +1091,7 @@ export function EvalPanel({
             <EvalMarkdown content={artifact.content} />
           ) : artifact?.format === 'html' ? (
             <iframe
-              title="Eval HTML 报告"
+              title={t('Eval HTML 报告')}
               sandbox="allow-scripts"
               className="dashboard-eval-report-frame"
               srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">${artifact.content}`}
@@ -1083,7 +1122,9 @@ function EvalCreate({
   onStarted,
   runs,
 }) {
+  useDashboardLanguage();
   const [form] = Form.useForm();
+  useDashboardFormLanguage(form);
   const { message } = App.useApp();
   const [step, setStep] = useState(initialConfig && !reviewTarget ? 2 : 0);
   const [seedConfig, setSeedConfig] = useState(initialConfig);
@@ -1194,14 +1235,15 @@ function EvalCreate({
     setError(null);
     try {
       if (step !== 1) await form.validateFields();
-      if (!String(form.getFieldValue('target') ?? '').trim()) throw new Error('请选择本地目标路径');
+      if (!String(form.getFieldValue('target') ?? '').trim())
+        throw new Error(t('请选择本地目标路径'));
       const value = await requestJson(base, '/preview', { body: configuration() });
       if (!live.current) return;
       setPreview(value);
       launchId.current = crypto.randomUUID();
       if (advance) setStep((current) => Math.min(2, current + 1));
     } catch (err) {
-      if (live.current) setError(err.message || '请补齐目标配置');
+      if (live.current) setError(err.message || t('请补齐目标配置'));
     } finally {
       if (live.current) setBusy(false);
     }
@@ -1238,18 +1280,18 @@ function EvalCreate({
     <div className="dashboard-eval-stack dashboard-eval-create">
       <div className="dashboard-eval-heading dashboard-eval-masthead">
         <div>
-          <Text className="dashboard-eval-eyebrow">EVAL / 新运行</Text>
+          <Text className="dashboard-eval-eyebrow">{t('EVAL / 新运行')}</Text>
           <Title level={3} className="dashboard-eval-title">
-            新建评估
+            {t('新建评估')}
           </Title>
-          <Text type="secondary">固定目标与用例，检查环境后开始执行。</Text>
+          <Text type="secondary">{t('固定目标与用例，检查环境后开始执行。')}</Text>
         </div>
         <Space wrap>
           <Button type="text" onClick={onGuide}>
-            使用指南
+            {t('使用指南')}
           </Button>
           <Button onClick={onBack} disabled={starting}>
-            返回记录
+            {t('返回记录')}
           </Button>
         </Space>
       </div>
@@ -1279,19 +1321,21 @@ function EvalCreate({
         <Alert
           type="info"
           showIcon
-          message={`失败用例重跑 · 原记录 ${seedConfig.retrySourceRunId}`}
-          description="仅执行原记录中失败的组合，完整用例和基线保持原状；环境异常也可在修复后重跑。"
+          message={t('失败用例重跑 · 原记录 {0}', [seedConfig.retrySourceRunId])}
+          description={t(
+            '仅执行原记录中失败的组合，完整用例和基线保持原状；环境异常也可在修复后重跑。',
+          )}
         />
       )}
       <Steps
         current={step}
-        items={[{ title: '目标与快照' }, { title: '用例与标准' }, { title: '执行与确认' }]}
+        items={[{ title: t('目标与快照') }, { title: t('用例与标准') }, { title: t('执行与确认') }]}
       />
       {error && (
         <Alert
           type="error"
           showIcon
-          message="评估配置需要调整"
+          message={t('评估配置需要调整')}
           description={
             <>
               <Paragraph>{evalDisplayError(error)}</Paragraph>
@@ -1334,12 +1378,12 @@ function EvalCreate({
         }}
       >
         {step === 0 && (
-          <Card size="small" title="评估目标">
-            <Form.Item label="目标类型" name="targetType">
+          <Card size="small" title={t('评估目标')}>
+            <Form.Item label={t('目标类型')} name="targetType">
               <Select
                 options={[
-                  { value: 'auto', label: '自动识别（推荐）' },
-                  { value: 'application', label: 'SDK 应用' },
+                  { value: 'auto', label: t('自动识别（推荐）') },
+                  { value: 'application', label: t('SDK 应用') },
                   { value: 'skill', label: 'Skill / Eval manifest' },
                 ]}
                 onChange={(type) => {
@@ -1359,12 +1403,12 @@ function EvalCreate({
               />
             </Form.Item>
             <Form.Item
-              label="目标路径"
+              label={t('目标路径')}
               name="target"
-              rules={[{ required: true, message: '请选择本地目标路径' }]}
+              rules={[{ required: true, message: t('请选择本地目标路径') }]}
               extra={
                 <Text type="secondary" className="dashboard-eval-secondary">
-                  支持本机绝对路径；相对路径基于当前选中的项目
+                  {t('支持本机绝对路径；相对路径基于当前选中的项目')}
                   {projectPath ? `：${projectPath}` : ''}。
                 </Text>
               }
@@ -1372,29 +1416,31 @@ function EvalCreate({
               <Input
                 placeholder={
                   targetTypeSelection === 'auto'
-                    ? 'Skill 目录、SKILL.md、comet/eval.yaml 或 application.json'
+                    ? t('Skill 目录、SKILL.md、comet/eval.yaml 或 application.json')
                     : targetType === 'application'
                       ? '.comet/applications/example/application.json'
-                      : 'Skill 目录、SKILL.md 或 comet/eval.yaml'
+                      : t('Skill 目录、SKILL.md 或 comet/eval.yaml')
                 }
               />
             </Form.Item>
             <Form.Item
-              label={targetType === 'application' ? '评估目标' : '评估目的（记录备注）'}
+              label={targetType === 'application' ? t('评估目标') : t('评估目的（记录备注）')}
               name="goal"
             >
               <Input.TextArea
                 rows={3}
                 maxLength={4000}
-                placeholder="希望验证的任务、用户决定或恢复行为"
+                placeholder={t('希望验证的任务、用户决定或恢复行为')}
               />
             </Form.Item>
-            <Text type="secondary">选择与预览不会调用模型。目标内容和依赖在正式运行时固定。</Text>
+            <Text type="secondary">
+              {t('选择与预览不会调用模型。目标内容和依赖在正式运行时固定。')}
+            </Text>
           </Card>
         )}
         {step === 1 && (
           <div className="dashboard-eval-stack">
-            <Card title="目标与用例身份" size="small">
+            <Card title={t('目标与用例身份')} size="small">
               {preview ? (
                 <Descriptions
                   size="small"
@@ -1402,18 +1448,18 @@ function EvalCreate({
                   items={[
                     {
                       key: 'target',
-                      label: '目标',
-                      children: `${preview.target.name} · ${preview.target.version ?? '无版本信息'}`,
+                      label: t('目标'),
+                      children: `${preview.target.name} · ${preview.target.version ?? t('无版本信息')}`,
                     },
-                    { key: 'path', label: '路径', children: preview.target.path },
+                    { key: 'path', label: t('路径'), children: preview.target.path },
                     {
                       key: 'content',
-                      label: '内容身份',
+                      label: t('内容身份'),
                       children: <Text code>{preview.target.contentHash}</Text>,
                     },
                     {
                       key: 'source',
-                      label: '用例来源',
+                      label: t('用例来源'),
                       children: sourceLabels[preview.taskSource] ?? preview.taskSource,
                     },
                   ]}
@@ -1421,10 +1467,10 @@ function EvalCreate({
               ) : (
                 <Alert
                   type="info"
-                  message="配置发生变化，请重新收集目标与用例"
+                  message={t('配置发生变化，请重新收集目标与用例')}
                   action={
                     <Button onClick={() => void inspect()} loading={busy}>
-                      收集用例
+                      {t('收集用例')}
                     </Button>
                   }
                 />
@@ -1434,14 +1480,22 @@ function EvalCreate({
               <Alert
                 type="info"
                 showIcon
-                message={`正式运行时生成并固定 ${preview.taskCount.min}–${preview.taskCount.max} 个用例`}
-                description="尚未生成具体用例。生成会调用模型，费用与用例执行费用分别记录。"
+                message={t('正式运行时生成并固定 {0}–{1} 个用例', [
+                  preview.taskCount.min,
+                  preview.taskCount.max,
+                ])}
+                description={t('尚未生成具体用例。生成会调用模型，费用与用例执行费用分别记录。')}
               />
             ) : preview?.tasks?.length ? (
               <EvalSection
-                title="固定用例"
-                description="查看输入与判定标准，确认这些用例能回答本次评估目标。"
-                extra={<Tag>{preview.tasks.length} 个用例</Tag>}
+                title={t('固定用例')}
+                description={t('查看输入与判定标准，确认这些用例能回答本次评估目标。')}
+                extra={
+                  <Tag>
+                    {preview.tasks.length}
+                    {t(' 个用例')}
+                  </Tag>
+                }
               >
                 <div className="dashboard-eval-file-list">
                   {preview.tasks.map((item) => (
@@ -1456,38 +1510,38 @@ function EvalCreate({
                           {item.name}
                         </Button>
                         <Text className="dashboard-eval-case-excerpt" type="secondary">
-                          {item.instruction ?? '由固定用例模板提供输入'}
+                          {item.instruction ?? t('由固定用例模板提供输入')}
                         </Text>
                       </div>
                       <Button
                         type="text"
                         onClick={() => setTask(item)}
-                        aria-label={`查看用例 ${item.name}`}
+                        aria-label={t('查看用例 {0}', [item.name])}
                       >
-                        查看标准
+                        {t('查看标准')}
                       </Button>
                     </div>
                   ))}
                 </div>
               </EvalSection>
             ) : (
-              <Empty description="没有可执行用例，请检查目标配置" />
+              <Empty description={t('没有可执行用例，请检查目标配置')} />
             )}
             {targetType === 'skill' && (
-              <Card size="small" title="用例选择">
+              <Card size="small" title={t('用例选择')}>
                 <Form.Item name="quick" valuePropName="checked">
-                  <Checkbox>使用快速冒烟用例</Checkbox>
+                  <Checkbox>{t('使用快速冒烟用例')}</Checkbox>
                 </Form.Item>
-                <Form.Item label="指定用例（可选）" name="task">
-                  <Input placeholder="使用 manifest 中已声明或内置用例的名称" />
+                <Form.Item label={t('指定用例（可选）')} name="task">
+                  <Input placeholder={t('使用 manifest 中已声明或内置用例的名称')} />
                 </Form.Item>
                 <Button loading={busy} onClick={() => void inspect()}>
-                  更新用例预览
+                  {t('更新用例预览')}
                 </Button>
               </Card>
             )}
             <Text type="secondary">
-              已有固定用例可查看输入与判定标准。自动生成的用例会在正式运行时固定。
+              {t('已有固定用例可查看输入与判定标准。自动生成的用例会在正式运行时固定。')}
             </Text>
           </div>
         )}
@@ -1496,45 +1550,48 @@ function EvalCreate({
             <Card size="small" className="dashboard-eval-settings-summary">
               <div className="dashboard-eval-heading">
                 <div>
-                  <Text strong>全局 Eval 设置</Text>
+                  <Text strong>{t('全局 Eval 设置')}</Text>
                   <br />
                   <Text type="secondary">
                     {userSettings?.defaults
-                      ? `${userSettings.defaults.agent} · ${userSettings.defaults.model || '运行时默认模型'}`
-                      : '模型与凭据可在设置中统一配置'}
-                    。本次可调整执行参数。
+                      ? `${userSettings.defaults.agent} · ${userSettings.defaults.model || t('运行时默认模型')}`
+                      : t('模型与凭据可在设置中统一配置')}
+                    {t('。本次可调整执行参数。')}
                   </Text>
                 </div>
-                <Button onClick={onSettings}>编辑 Eval 设置</Button>
+                <Button onClick={onSettings}>{t('编辑 Eval 设置')}</Button>
               </div>
             </Card>
-            <Card title="执行配置" size="small">
+            <Card title={t('执行配置')} size="small">
               <Descriptions
                 size="small"
                 column={1}
                 items={[
                   {
                     key: 'agent',
-                    label: '执行 Agent',
-                    children: summaryConfig.agent || '运行时默认',
+                    label: t('执行 Agent'),
+                    children: summaryConfig.agent || t('运行时默认'),
                   },
                   {
                     key: 'model',
-                    label: '执行模型',
-                    children: summaryConfig.model || '运行时默认',
+                    label: t('执行模型'),
+                    children: summaryConfig.model || t('运行时默认'),
                   },
                   {
                     key: 'judge',
-                    label: '独立 Judge',
+                    label: t('独立 Judge'),
                     children:
                       summaryConfig.judgeEnabled === false || !summaryConfig.judgeModel
-                        ? '未启用'
-                        : `${summaryConfig.judgeAgent || '默认 Agent'} / ${summaryConfig.judgeModel}`,
+                        ? t('未启用')
+                        : `${summaryConfig.judgeAgent || t('默认 Agent')} / ${summaryConfig.judgeModel}`,
                   },
                   {
                     key: 'budget',
-                    label: '执行预算',
-                    children: `${summaryConfig.timeoutSeconds ?? '—'} 秒 / ${summaryConfig.maxTurns ?? '—'} 轮`,
+                    label: t('执行预算'),
+                    children: t('{0} 秒 / {1} 轮', [
+                      summaryConfig.timeoutSeconds ?? '—',
+                      summaryConfig.maxTurns ?? '—',
+                    ]),
                   },
                 ]}
               />
@@ -1545,40 +1602,40 @@ function EvalCreate({
                 aria-controls="eval-run-overrides"
                 onClick={() => setOverrideOpen((value) => !value)}
               >
-                {overrideOpen ? '收起临时覆盖' : '临时覆盖本次配置'}
+                {overrideOpen ? t('收起临时覆盖') : t('临时覆盖本次配置')}
               </Button>
               <div id="eval-run-overrides" hidden={!overrideOpen}>
                 <div className="dashboard-eval-form-section">
                   <EvalSection
-                    title="执行模型"
-                    description="选择适配器与模型，留空的值沿用运行环境。"
+                    title={t('执行模型')}
+                    description={t('选择适配器与模型，留空的值沿用运行环境。')}
                   />
                   <div className="dashboard-eval-form-grid">
-                    <Form.Item label="执行 Agent" name="agent">
-                      <AutoComplete options={options} placeholder="内置或已安装的适配器 ID" />
+                    <Form.Item label={t('执行 Agent')} name="agent">
+                      <AutoComplete options={options} placeholder={t('内置或已安装的适配器 ID')} />
                     </Form.Item>
-                    <Form.Item label="执行模型" name="model">
-                      <Input placeholder="留空沿用目标或当前环境配置" />
+                    <Form.Item label={t('执行模型')} name="model">
+                      <Input placeholder={t('留空沿用目标或当前环境配置')} />
                     </Form.Item>
                   </div>
                 </div>
                 <div className="dashboard-eval-form-section">
                   <EvalSection
-                    title="独立判定"
-                    description="需要单独的判定模型时，配置独立 Judge。"
+                    title={t('独立判定')}
+                    description={t('需要单独的判定模型时，配置独立 Judge。')}
                   />
                   <Form.Item name="judgeEnabled" valuePropName="checked">
-                    <Checkbox>配置独立 Judge</Checkbox>
+                    <Checkbox>{t('配置独立 Judge')}</Checkbox>
                   </Form.Item>
                   {judgeEnabled && (
                     <div className="dashboard-eval-form-grid">
                       <Form.Item label="Judge Agent" name="judgeAgent">
-                        <AutoComplete options={options} placeholder="独立 Judge 的 Agent" />
+                        <AutoComplete options={options} placeholder={t('独立 Judge 的 Agent')} />
                       </Form.Item>
                       <Form.Item
-                        label="Judge 模型"
+                        label={t('Judge 模型')}
                         name="judgeModel"
-                        rules={[{ required: true, message: '请指定 Judge 模型' }]}
+                        rules={[{ required: true, message: t('请指定 Judge 模型') }]}
                       >
                         <Input />
                       </Form.Item>
@@ -1586,16 +1643,19 @@ function EvalCreate({
                   )}
                 </div>
                 <div className="dashboard-eval-form-section">
-                  <EvalSection title="执行预算" description="达到总时限或轮数上限时停止执行。" />
+                  <EvalSection
+                    title={t('执行预算')}
+                    description={t('达到总时限或轮数上限时停止执行。')}
+                  />
                   <div className="dashboard-eval-form-grid">
-                    <Form.Item label="评估总时限（秒）" name="timeoutSeconds">
+                    <Form.Item label={t('评估总时限（秒）')} name="timeoutSeconds">
                       <InputNumber
                         min={30}
                         max={targetType === 'application' ? 3600 : 86400}
                         style={{ width: '100%' }}
                       />
                     </Form.Item>
-                    <Form.Item label="最大执行轮数" name="maxTurns">
+                    <Form.Item label={t('最大执行轮数')} name="maxTurns">
                       <InputNumber
                         min={1}
                         max={targetType === 'application' ? 32 : 200}
@@ -1605,26 +1665,26 @@ function EvalCreate({
                   </div>
                 </div>
                 <div className="dashboard-eval-form-section">
-                  <EvalSection title="报告与环境" />
+                  <EvalSection title={t('报告与环境')} />
                   {targetType === 'skill' && (
                     <div className="dashboard-eval-form-grid">
-                      <Form.Item label="报告与追踪去向" name="suite">
+                      <Form.Item label={t('报告与追踪去向')} name="suite">
                         <Select
                           options={[
-                            { value: 'local', label: '本地' },
+                            { value: 'local', label: t('本地') },
                             { value: 'langsmith', label: 'LangSmith' },
                             { value: 'langfuse', label: 'Langfuse' },
                           ]}
                         />
                       </Form.Item>
-                      <Form.Item label="执行端点覆盖（可选）" name="baseUrl">
+                      <Form.Item label={t('执行端点覆盖（可选）')} name="baseUrl">
                         <Input placeholder="https://provider.example/v1" />
                       </Form.Item>
-                      <Form.Item label="评估 Profile（可选）" name="profile">
-                        <Input placeholder="沿用目标配置" />
+                      <Form.Item label={t('评估 Profile（可选）')} name="profile">
+                        <Input placeholder={t('沿用目标配置')} />
                       </Form.Item>
                       {judgeEnabled && (
-                        <Form.Item label="Judge 端点覆盖（可选）" name="judgeBaseUrl">
+                        <Form.Item label={t('Judge 端点覆盖（可选）')} name="judgeBaseUrl">
                           <Input />
                         </Form.Item>
                       )}
@@ -1633,14 +1693,16 @@ function EvalCreate({
                 </div>
                 {targetType === 'application' && (
                   <Text type="secondary">
-                    SDK 应用使用完整固定用例和 local 模式；端点由执行环境提供，每个用例执行一次。
+                    {t(
+                      'SDK 应用使用完整固定用例和 local 模式；端点由执行环境提供，每个用例执行一次。',
+                    )}
                   </Text>
                 )}
               </div>
             </Card>
-            <Card title="预检与执行摘要" size="small">
+            <Card title={t('预检与执行摘要')} size="small">
               <Button icon={<ReloadOutlined />} loading={busy} onClick={() => void inspect()}>
-                检查目标与执行环境
+                {t('检查目标与执行环境')}
               </Button>
               {preview && (
                 <div className="dashboard-eval-stack">
@@ -1651,38 +1713,44 @@ function EvalCreate({
                     items={[
                       {
                         key: 'target',
-                        label: '目标',
+                        label: t('目标'),
                         children: `${preview.target.name} · ${preview.target.version ?? '—'}`,
                       },
                       {
                         key: 'cases',
-                        label: '用例',
+                        label: t('用例'),
                         children:
                           preview.taskCount.min === preview.taskCount.max
-                            ? `${preview.taskCount.min} 个固定用例`
-                            : `待生成 ${preview.taskCount.min}–${preview.taskCount.max} 个`,
+                            ? t('{0} 个固定用例', [preview.taskCount.min])
+                            : t('待生成 {0}–{1} 个', [
+                                preview.taskCount.min,
+                                preview.taskCount.max,
+                              ]),
                       },
                       {
                         key: 'limits',
-                        label: '预算',
-                        children: `${preview.config.timeoutSeconds} 秒 / ${preview.config.maxTurns} 轮`,
+                        label: t('预算'),
+                        children: t('{0} 秒 / {1} 轮', [
+                          preview.config.timeoutSeconds,
+                          preview.config.maxTurns,
+                        ]),
                       },
                       {
                         key: 'agent',
-                        label: '执行 Agent / 模型',
-                        children: `${preview.config.agent} / ${preview.config.model ?? '运行时默认'}`,
+                        label: t('执行 Agent / 模型'),
+                        children: `${preview.config.agent} / ${preview.config.model ?? t('运行时默认')}`,
                       },
                       {
                         key: 'judge',
-                        label: '独立 Judge',
+                        label: t('独立 Judge'),
                         children: preview.config.judgeModel
                           ? `${preview.config.judgeAgent} / ${preview.config.judgeModel}`
-                          : '未启用',
+                          : t('未启用'),
                       },
                       {
                         key: 'cost',
-                        label: '费用',
-                        children: '会调用模型；当前无法提供完整费用估算',
+                        label: t('费用'),
+                        children: t('会调用模型；当前无法提供完整费用估算'),
                       },
                     ]}
                   />
@@ -1698,7 +1766,7 @@ function EvalCreate({
                                 : 'default'
                           }
                         >
-                          {check.label}
+                          {t(check.label)}
                         </Tag>
                         <Text>{evalDisplayError(check.detail)}</Text>
                       </div>
@@ -1708,7 +1776,7 @@ function EvalCreate({
                     <Alert
                       type="error"
                       showIcon
-                      message="当前无法开始评估"
+                      message={t('当前无法开始评估')}
                       description={
                         <>
                           <Paragraph>
@@ -1724,11 +1792,11 @@ function EvalCreate({
                   )}
                   {preview.limitations.map((limit, index) => (
                     <Text key={index} type="secondary">
-                      {limit}
+                      {t(limit)}
                     </Text>
                   ))}
                   {baselineCandidates.length > 0 && (
-                    <Form.Item label="启动时绑定的基线（可选）" name="baselineRunId">
+                    <Form.Item label={t('启动时绑定的基线（可选）')} name="baselineRunId">
                       <Select
                         allowClear
                         options={baselineCandidates.map((run) => ({
@@ -1750,17 +1818,17 @@ function EvalCreate({
       >
         {step > 0 && (
           <Button onClick={() => setStep((current) => current - 1)} disabled={busy || starting}>
-            上一步
+            {t('上一步')}
           </Button>
         )}
         {step < 2 ? (
           <Button
             type="primary"
-            aria-label="下一步"
+            aria-label={t('下一步')}
             loading={busy}
             onClick={() => void inspect(true)}
           >
-            下一步
+            {t('下一步')}
           </Button>
         ) : (
           <Button
@@ -1770,28 +1838,28 @@ function EvalCreate({
             disabled={!preview || preview.blockedReasons.length > 0 || busy}
             onClick={() => void start()}
           >
-            开始评估
+            {t('开始评估')}
           </Button>
         )}
       </Space>
       <Drawer
         open={!!task}
         onClose={() => setTask(null)}
-        title={task?.name ?? '用例预览'}
+        title={task?.name ?? t('用例预览')}
         width={720}
         rootClassName="dashboard-eval-drawer"
       >
         <div className="dashboard-eval-stack">
-          <EvalSection title="输入 / 指令">
+          <EvalSection title={t('输入 / 指令')}>
             <pre className="dashboard-eval-reading">
-              {task?.instruction ?? '由固定用例模板提供'}
+              {task?.instruction ?? t('由固定用例模板提供')}
             </pre>
           </EvalSection>
-          <EvalSection title="判定标准">
+          <EvalSection title={t('判定标准')}>
             <pre className="dashboard-eval-reading dashboard-eval-pre">
               {task?.expected
                 ? JSON.stringify(task.expected, null, 2)
-                : '由固定验证器提供，运行后展示具体检查项'}
+                : t('由固定验证器提供，运行后展示具体检查项')}
             </pre>
           </EvalSection>
         </div>

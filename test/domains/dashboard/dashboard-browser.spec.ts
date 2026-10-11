@@ -1,4 +1,190 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+
+test('localizes legacy system metadata while keeping authored knowledge and memory unchanged', async ({
+  page,
+}) => {
+  const { DEMO_PLUGIN_PAGES } = await import('../../../domains/dashboard/web/demo.js');
+  const pages = structuredClone(DEMO_PLUGIN_PAGES);
+  const knowledge = pages.find((entry) => entry.pluginId === 'comet.project-knowledge')!;
+  const generated = {
+    ...knowledge.data.records[0],
+    id: 'generated-module-dashboard',
+    type: 'dependency',
+    authority: 'repository',
+    title: '模块入口与依赖：domains/dashboard',
+    summary: '可确认入口：domains/dashboard/server.ts。 跨模块依赖：domains/eval。',
+    conclusions: [],
+    applicationHistory: [],
+    lastApplication: null,
+  };
+  const authored = { ...generated, id: 'authored-record', authority: 'user' };
+  knowledge.data.records = [generated, authored];
+  knowledge.data.diagnostics = [
+    {
+      code: 'index-budget',
+      message: '未进入检索：索引刷新超过时间预算，尚未处理的语料当前不会参与召回。',
+    },
+  ];
+  const memory = pages.find((entry) => entry.pluginId === 'comet.personal-memory')!;
+  const base =
+    memory.data.management.records.find((record) => record.memoryType === 'collaboration-policy') ??
+    memory.data.management.records[0];
+  const remembered = {
+    ...base,
+    id: 'memory-language',
+    authority: 'explicit',
+    category: '项目约定',
+    text: '回答问题都用中文',
+    memoryType: 'collaboration-policy',
+    lastApplication: {
+      ...base.lastApplication,
+      whyApplied: '由用户明确要求，立即更新个人记忆；用户明确设置；当前项目已匹配',
+    },
+  };
+  memory.data.management.records = [remembered];
+  memory.data.retrieval.records = [remembered];
+  memory.data.retrieval.profileRecords = [];
+  let writes = 0;
+  await page.route('**/api/dashboard/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (route.request().method() === 'POST') writes++;
+    if (pathname === '/api/dashboard/projects')
+      return route.fulfill({
+        json: {
+          currentProjectId: 'fixture',
+          projects: [
+            {
+              id: 'fixture',
+              name: 'Fixture',
+              path: '/fixture',
+              availability: 'available',
+              isCurrent: true,
+            },
+          ],
+        },
+      });
+    if (pathname.endsWith('/overview'))
+      return route.fulfill({
+        json: {
+          project: { name: 'Fixture', path: '/fixture' },
+          summary: { activeChanges: 0, archivedChanges: 0 },
+          initialChanges: { items: [], total: 0 },
+          git: {},
+          native: null,
+        },
+      });
+    if (pathname.endsWith('/plugins')) return route.fulfill({ json: { pages } });
+    const plugin = pages.find((entry) => pathname.endsWith('/plugins/' + entry.pluginId));
+    return route.fulfill({ json: plugin ?? { items: [], total: 0 } });
+  });
+  await page.goto('/');
+  await page.locator('.comet-language-switch').getByText('EN', { exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Project knowledge' }).click();
+  await expect(
+    page
+      .getByText('Module entry points and dependencies: domains/dashboard', { exact: true })
+      .first(),
+  ).toBeVisible();
+  await expect(page.getByText(/index refresh exceeded its time budget/u)).toBeVisible();
+  await expect(
+    page.locator('.dashboard-knowledge-ledger-row').getByText(authored.title, { exact: true }),
+  ).toBeVisible();
+  await page.getByRole('menuitem', { name: 'Personal memory' }).click();
+  const row = page.locator('.dashboard-memory-table-row');
+  await expect(row.getByText('回答问题都用中文', { exact: true })).toBeVisible();
+  await expect(row.locator('.dashboard-memory-why')).toContainText(
+    'Requested directly by the user; Explicitly set by the user; Current project matches',
+  );
+  expect(writes).toBe(0);
+});
+
+test('switches the interface language across workspaces and keeps the choice after reload', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?demo');
+  const language = page.locator('.comet-language-switch');
+  await language.getByText('EN', { exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await expect(page.getByText('Project overview', { exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'Project knowledge' })).toBeVisible();
+  const messages = JSON.parse(
+    await readFile('domains/dashboard/web/src/messages.en.json', 'utf8'),
+  ) as Record<string, string>;
+  const checkInterface = async () => {
+    const copy = await page
+      .locator(
+        'button, label, [role="tab"], [role="menuitem"], [role="option"], input[placeholder], [aria-label], [title]',
+      )
+      .evaluateAll((elements) =>
+        elements.flatMap((element) =>
+          [
+            element.textContent?.trim(),
+            element.getAttribute('aria-label'),
+            element.getAttribute('placeholder'),
+            element.getAttribute('title'),
+          ].filter((value): value is string => Boolean(value)),
+        ),
+      );
+    expect
+      .soft([
+        ...new Set(
+          copy.filter(
+            (value) =>
+              value !== '中文' && Object.hasOwn(messages, value) && messages[value] !== value,
+          ),
+        ),
+      ])
+      .toEqual([]);
+  };
+  await checkInterface();
+  await page.getByRole('menuitem', { name: 'Native workflow' }).click();
+  await expect(page.getByText('Native change workspace', { exact: true })).toBeVisible();
+  await checkInterface();
+  await page.getByRole('menuitem', { name: 'Personal memory' }).click();
+  await expect(page.getByLabel('Search personal memories')).toBeVisible();
+  await checkInterface();
+  await page.getByRole('menuitem', { name: 'Project knowledge' }).click();
+  await expect(page.getByRole('tab', { name: 'Project overview', exact: true })).toBeVisible();
+  await checkInterface();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: /Comet settings/u });
+  await expect(settings).toBeVisible();
+  await settings.getByRole('menuitem', { name: 'Comet configuration' }).click();
+  await expect(settings.getByText('Workflows and recovery', { exact: true })).toBeVisible();
+  await checkInterface();
+  await page.screenshot({ path: test.info().outputPath('dashboard-english-settings.png') });
+  await settings.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await expect(page.getByRole('tab', { name: 'Project overview', exact: true })).toBeVisible();
+  await language.getByText('中文', { exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await expect(page.getByRole('tab', { name: '项目概况', exact: true })).toBeVisible();
+});
+
+test('keeps the language switch accessible in both themes and on narrow screens', async ({
+  page,
+}) => {
+  await page.goto('/?demo');
+  await page.locator('.comet-language-switch').getByText('EN', { exact: true }).click();
+  for (const width of [1440, 1180, 1024, 900, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const control = page.locator('.comet-language-switch');
+    await expect(control).toBeVisible();
+    const box = await control.boundingBox();
+    expect(box!.x).toBeGreaterThan(width / 2);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    expect(box!.y).toBeLessThan(160);
+    await page.screenshot({ path: test.info().outputPath(`dashboard-english-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole('button', { name: 'Switch to dark mode' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.locator('.comet-language-switch').getByText('中文', { exact: true }).click();
+  await expect(page.getByRole('button', { name: '切换到亮色模式' })).toBeVisible();
+});
 
 test.describe('Dashboard project selection', () => {
   const projects = Array.from({ length: 45 }, (_, index) => ({
@@ -2968,7 +3154,8 @@ test('keeps the redesigned header focused on controls rather than helper copy', 
   await expect(header.getByText('工作流', { exact: true })).toHaveCount(0);
   await expect(header.locator('.comet-header-sync')).toHaveCount(0);
   await expect(header).toHaveCSS('min-height', '68px');
-  await expect(header.locator('.ant-segmented')).toHaveCount(0);
+  await expect(header.locator('.ant-segmented')).toHaveCount(1);
+  await expect(header.locator('.comet-language-switch')).toBeVisible();
   const search = header.locator('.comet-header-search');
   const mainWorkspace = page.locator('.dashboard-workbench > section');
   await expect(search).toHaveCSS('position', 'static');
