@@ -4502,6 +4502,7 @@ function AntSidebar({
                 icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
                 onClick={collapsed ? onExpand : onCollapse}
                 aria-label={collapsed ? t('展开侧边栏') : t('收起侧边栏')}
+                aria-expanded={!collapsed}
               />
             </Tooltip>
           </div>

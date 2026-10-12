@@ -3353,7 +3353,7 @@ test('keeps the desktop sidebar transition unified and settings reachable when c
   const footer = sidebar.locator('.dashboard-sidebar-footer');
   const settings = sidebar.locator('.dashboard-sidebar-settings');
 
-  await expect(workbench).toHaveCSS('transition-duration', '0.22s');
+  await expect(workbench).toHaveCSS('transition-duration', '0.28s');
   await expect(sidebar).toHaveCSS('transition-property', 'none');
   await expect(footer).toHaveCSS('flex-shrink', '0');
   await expect(settings).toBeInViewport();
@@ -3371,9 +3371,12 @@ test('keeps the desktop sidebar transition unified and settings reachable when c
   await expect(settings).toHaveCSS('width', '40px');
   await expect(settings).toBeInViewport();
   await expect(settings).toBeEnabled();
-  await expect(sidebar.locator('.dashboard-sidebar-footer-label')).toHaveCSS('display', 'none');
+  await expect(sidebar.locator('.dashboard-sidebar-footer-label')).toHaveCSS(
+    'visibility',
+    'hidden',
+  );
   await expect(settings.locator('.anticon-setting')).toBeVisible();
-  await expect(settings.locator('.dashboard-sidebar-settings-label')).toBeHidden();
+  await expect(settings.locator('.dashboard-sidebar-settings-label')).toHaveCSS('opacity', '0');
   await settings.click();
   await expect(page.getByRole('dialog', { name: /Comet 设置/u })).toBeVisible();
 });
@@ -3399,21 +3402,83 @@ test('removes horizontal overflow from the collapsed sidebar on narrow desktop s
 test('keeps collapsed sidebar menu icons aligned with their expanded positions', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/?demo');
+  await expect(page.locator('.dashboard-plugin-menu .ant-menu-item')).toHaveCount(2);
+  for (const viewport of [
+    { width: 1280, height: 900 },
+    { width: 1024, height: 600 },
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const name of ['收起侧边栏', '展开侧边栏']) {
+      await page.evaluate(() => {
+        const icons = [
+          ...document.querySelectorAll(
+            '.dashboard-sidebar .ant-menu-item > .anticon svg, .dashboard-sidebar-settings > .anticon svg',
+          ),
+        ];
+        (window as any).sidebarIconFrames = [];
+        const until = performance.now() + 500;
+        const capture = () => {
+          (window as any).sidebarIconFrames.push(
+            icons.map((icon) => {
+              const box = icon.getBoundingClientRect();
+              return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+            }),
+          );
+          if (performance.now() < until) requestAnimationFrame(capture);
+        };
+        capture();
+      });
+      await page.getByRole('button', { name, exact: true }).click();
+      await page.waitForTimeout(550);
+      const frames = await page.evaluate(
+        () => (window as any).sidebarIconFrames as { x: number; y: number }[][],
+      );
+      expect(frames[0].length).toBe(7);
+      const drift = frames[0].map((_, index) => {
+        const ys = frames.map((frame) => frame[index].y);
+        return Math.max(...ys) - Math.min(...ys);
+      });
+      expect(Math.max(...drift), JSON.stringify(drift)).toBeLessThanOrEqual(1);
+      const horizontalDrift = frames[0].map((_, index) => {
+        const xs = frames.map((frame) => frame[index].x);
+        return Math.max(...xs) - Math.min(...xs);
+      });
+      expect(Math.max(...horizontalDrift), JSON.stringify(horizontalDrift)).toBeLessThanOrEqual(1);
+    }
+  }
+});
 
-  const workflowIconItem = page.locator('.dashboard-workflow-menu .ant-menu-item').first();
-  const expandedTop = await workflowIconItem.evaluate(
-    (element) => element.getBoundingClientRect().top,
+test('sidebar labels reveal after expansion and rapid reversals respect reduced motion', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/?demo');
+  const workbench = page.locator('.dashboard-workbench');
+  const label = page.locator('.dashboard-sidebar .ant-menu-title-content').first();
+  await page.getByRole('button', { name: '收起侧边栏', exact: true }).click();
+  await expect(label).toHaveCSS('opacity', '0');
+  await expect(workbench).toHaveCSS('transition-duration', '0.24s');
+  await page.getByRole('button', { name: '展开侧边栏', exact: true }).click();
+  await expect(label).toHaveCSS('transition-delay', '0.08s, 0.06s');
+  await page.getByRole('button', { name: '收起侧边栏', exact: true }).click();
+  await page.getByRole('button', { name: '展开侧边栏', exact: true }).click();
+  await expect(label).toHaveCSS('opacity', '1');
+  await expect(page.getByRole('button', { name: '收起侧边栏', exact: true })).toHaveAttribute(
+    'aria-expanded',
+    'true',
   );
-
-  await page.getByRole('button', { name: '收起侧边栏' }).click();
-  await page.waitForTimeout(260);
-
-  const collapsedTop = await workflowIconItem.evaluate(
-    (element) => element.getBoundingClientRect().top,
-  );
-  expect(Math.abs(collapsedTop - expandedTop)).toBeLessThanOrEqual(1);
+  await page.getByRole('button', { name: '切换到暗色模式' }).click();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('button', { name: '收起侧边栏', exact: true }).click();
+  await expect(workbench).toHaveCSS('transition-duration', '0s');
+  await expect(label).toHaveCSS('transition-duration', '0s');
+  await expect(label).toHaveCSS('opacity', '0');
+  await page.getByRole('button', { name: '展开侧边栏', exact: true }).click();
+  await expect(label).toHaveCSS('opacity', '1');
+  await page.getByRole('menuitem', { name: '个人记忆' }).click();
+  await expect(page.getByRole('region', { name: '个人记忆列表' })).toBeVisible();
 });
 
 test('uses the reference dashboard rhythm for suggestions and grouped metrics', async ({
