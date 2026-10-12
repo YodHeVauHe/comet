@@ -571,31 +571,6 @@ export function EvalPanel({
   );
   const list = (
     <div className="dashboard-eval-stack">
-      <div className="dashboard-eval-heading dashboard-eval-masthead">
-        <div>
-          <Text className="dashboard-eval-eyebrow">{t('EVAL / 项目评估')}</Text>
-          <Title level={3} className="dashboard-eval-title">
-            {t('评估工作台')}
-          </Title>
-          <Text type="secondary">{t('当前项目的评估运行与固定用例结果')}</Text>
-        </div>
-        <Space wrap>
-          <Button type="text" onClick={() => setGuideOpen(true)}>
-            {t('使用指南')}
-          </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => void refresh(true)} loading={loading}>
-            {t('刷新')}
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => newRun()}
-            disabled={readOnly}
-          >
-            {t('新建评估')}
-          </Button>
-        </Space>
-      </div>
       <div className="dashboard-eval-summary-band" aria-label={t('评估记录统计')}>
         <Metric label={t('运行记录')} value={runs.length} />
         <Metric
@@ -627,15 +602,31 @@ export function EvalPanel({
             { value: 'baseline', label: t('仅看基线') },
           ]}
         />
-        <Tooltip
-          title={t(
-            '同一目标、固定用例与评分规则最多一个默认基线。完整但未通过的结果也可设置；可以替换或取消，历史证据保留。',
-          )}
-        >
-          <Button type="text" size="small" icon={<InfoCircleOutlined />}>
-            {t('基线规则')}
+        <Space wrap>
+          <Button type="text" onClick={() => setGuideOpen(true)}>
+            {t('使用指南')}
           </Button>
-        </Tooltip>
+          <Button icon={<ReloadOutlined />} onClick={() => void refresh(true)} loading={loading}>
+            {t('刷新')}
+          </Button>
+          <Tooltip
+            title={t(
+              '同一目标、固定用例与评分规则最多一个默认基线。完整但未通过的结果也可设置；可以替换或取消，历史证据保留。',
+            )}
+          >
+            <Button type="text" size="small" icon={<InfoCircleOutlined />}>
+              {t('基线规则')}
+            </Button>
+          </Tooltip>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => newRun()}
+            disabled={readOnly}
+          >
+            {t('新建评估')}
+          </Button>
+        </Space>
       </div>
       {!loading && runs.length === 0 && <EvalFirstUse />}
       {!loading && !filtered.length ? (

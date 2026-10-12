@@ -2,31 +2,6 @@
   min-width: 0;
   color: var(--color-fg);
 }
-.any-page-title {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-}
-.any-page-title small {
-  font-size: 10px;
-  letter-spacing: 1.5px;
-  color: var(--color-muted);
-  font-weight: 600;
-}
-.any-page-title h1 {
-  font-size: 30px;
-  font-weight: 700;
-  letter-spacing: -0.8px;
-  line-height: 1.35;
-  margin-top: 8px;
-}
-.any-page-title p {
-  font-size: 13px;
-  color: var(--color-muted);
-  margin-top: 9px;
-  line-height: 1.8;
-}
 .any-overview {
   display: flex;
   justify-content: space-between;
@@ -1128,9 +1103,6 @@
   }
   .any-overview {
     margin-bottom: 17px;
-  }
-  .any-page-title h1 {
-    font-size: 28px;
   }
   .any-workspace .ant-tabs-tab + .ant-tabs-tab {
     margin-left: 19px !important;

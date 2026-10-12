@@ -521,14 +521,6 @@ export function AnyWorkflowPanel({
       data-dashboard-motion="page"
       aria-label={t('Comet Any 工作区')}
     >
-      <header className="any-page-title">
-        <div>
-          <small>WORKFLOW APPLICATIONS</small>
-          <h1>Comet Any</h1>
-          <p>{t('从创作到运行，沿着每一步查看结果。')}</p>
-        </div>
-        {demo && <Tag>{t('示例数据')}</Tag>}
-      </header>
       <div className="any-overview">
         <div className="any-stat-strip">
           {[
@@ -552,7 +544,7 @@ export function AnyWorkflowPanel({
         <aside className="any-panel any-explorer">
           <div className="any-panel-heading">
             <b>{t('创作与应用')}</b>
-            <span>{t('当前项目')}</span>
+            <span>{demo ? t('示例数据') : t('当前项目')}</span>
           </div>
           <div className="any-search">
             <Input

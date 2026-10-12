@@ -122,7 +122,8 @@ test.describe('Dashboard Eval', () => {
     await page.reload();
     await expect(page.getByRole('tab', { name: '用例结果' })).toBeVisible();
     await page.goBack();
-    await expect(page.getByText('评估工作台', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('运行筛选')).toBeVisible();
+    await expect(page.getByRole('heading', { name: '评估工作台', exact: true })).toHaveCount(0);
     await page.goForward();
     await expect(page.getByRole('tab', { name: '用例结果' })).toBeVisible();
     await page.getByRole('menuitem', { name: 'Classic 工作流' }).click();
@@ -248,7 +249,10 @@ test.describe('Dashboard Eval', () => {
     page,
   }) => {
     await page.locator('.comet-language-switch').getByText('EN', { exact: true }).click();
-    await expect(page.getByText('Evaluation workspace', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /New evaluation/u })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: 'Evaluation workspace', exact: true }),
+    ).toHaveCount(0);
     await page.getByRole('button', { name: 'writer', exact: true }).click();
     await expect(page.getByRole('tab', { name: 'Case results' })).toBeVisible();
     await page.getByRole('tab', { name: 'Case results' }).click();

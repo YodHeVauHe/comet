@@ -70,7 +70,8 @@ test('Any preserves pinned runs, child navigation and historical selection throu
   });
   await page.goto('/');
   await page.getByRole('menuitem', { name: 'Comet Any' }).click();
-  await expect(page.getByRole('heading', { name: 'Comet Any', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Comet Any 工作区' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Comet Any', exact: true })).toHaveCount(0);
   await page.getByText('应用运行', { exact: true }).last().click();
   await expect(page.locator('.any-version')).toHaveText('v1.1.0');
   await expect(page.locator('.any-current-counts')).toContainText('2 项执行中');
