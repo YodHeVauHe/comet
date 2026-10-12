@@ -41,6 +41,24 @@ function classifyIssue(
 }
 
 describe('CI workflows', () => {
+  it('finishes the complete Node 22 suite in independent shards with retained failure reports', async () => {
+    const ci = parse(await readWorkflow('ci.yml'));
+    const node = ci.jobs['node-compatibility'];
+    expect(node.strategy['fail-fast']).toBe(false);
+    expect(node.strategy.matrix.shard).toEqual([1, 2]);
+    expect(node['timeout-minutes']).toBeGreaterThanOrEqual(40);
+    const tests = node.steps.find((step: { id?: string }) => step.id === 'node22-tests');
+    expect(tests.run).toContain('pnpm test --shard=${{ matrix.shard }}/2');
+    expect(tests.run).not.toContain('--exclude');
+    expect(tests.run).toContain('--outputFile.json=coverage/node22/results.json');
+    const report = node.steps.find((step: { uses?: string }) =>
+      step.uses?.startsWith('actions/upload-artifact@'),
+    );
+    expect(report.if).toContain('always()');
+    expect(report.with.name).toContain('${{ matrix.shard }}');
+    expect(ci.jobs['ci-required'].needs).toContain('node-compatibility');
+  });
+
   it('executes DSH installation and PowerShell protocol regressions on the OS matrix', async () => {
     const workflow = parse(await readWorkflow('ci.yml'));
     const runtime = workflow.jobs['runtime-smoke'];

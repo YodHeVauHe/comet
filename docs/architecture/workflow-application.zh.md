@@ -16,7 +16,7 @@
 
 所有包文件、Skill 文件、引用资源、适配契约和实现绑定都进入内容摘要。活动 Run 保存应用身份、项目实际路径、包实际路径和摘要。每次读取与原子提交都重新核对当前文件，持续进程也不能沿用加载时的旧摘要。相同版本的内容变化会拒绝继续；恢复原文件后继续原 Run。不同项目和 linked worktree 使用各自的项目路径与 Store；不会沿 Git 主仓库路径合并同名 Run。
 
-应用归属和 SDK Run 保存在 `.comet/runtime/applications/<id>` 的同一原子版本记录中。归属不负责业务转移。领域工厂可返回 `wrapStore(store, identity)`，包裹此 Store 来维护 `comet-state.yaml`、`.comet.yaml` 等领域投影和恢复事实；必须保留原 SDK Run 的比较与交换语义，不能用投影替代 Run。Native、Classic 的候选、授权、独立验收、Supervisor 与 Archive 规则仍归各自领域模块。
+应用归属和 SDK Run 保存在用户 Comet 数据目录的 `workspaces/<workspace-id>/runtime/applications/<id>` 中，二者作为同一记录原子发布；默认数据根为 `~/.comet`，可通过 `COMET_DATA_DIR` 指定。工作区隔离和旧目录处理见[本机 Runtime 存储](./runtime-local-storage.zh.md)。归属不负责业务转移。领域工厂可返回 `wrapStore(store, identity)`，包裹此 Store 来维护 `comet-state.yaml`、`.comet.yaml` 等领域投影和恢复事实；必须保留原 SDK Run 的比较与交换语义，不能用投影替代 Run。Native、Classic 的候选、授权、独立验收、Supervisor 与 Archive 规则仍归各自领域模块。
 
 当前选择统一写入 `.comet/current-change.json`，`workflow: application` 配合 `applicationId` 和 `change`（Run ID）。选择内置 Native/Classic 会覆盖同一文件，不保留另一份优先指针。终止的应用不再调用其 Guard；切回另一流程须使用该流程公开选择入口。编辑说明或投影不能改变 SDK 的依赖、领取、确认和 Outcome 检查。
 

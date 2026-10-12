@@ -4,6 +4,7 @@ This contract applies to `@rpamis/comet/runtime`, `@rpamis/comet/plugins`, and `
 
 ## Support and upgrades
 
+- Before upgrading from `0.4.5` to `0.5.0`, finish and archive active Native and Classic tasks with `0.4.5`, then upgrade and run `comet update`. Continuing old active tasks across these versions is not guaranteed. Machine-local Runtime data is persistent state; do not delete it as a cache during the upgrade.
 - These three public entrypoints follow the Comet package version. Existing deep imports remain compatible; new applications should not depend on the file layout under `domains/`.
 - Patch versions preserve public parameters, return values, and the meaning of existing error codes. Hosts must handle unfamiliar content conservatively when optional fields, interfaces, or error codes are added; do not assume the error-code set is closed. Breaking changes require an explicit version and upgrade guidance.
 - The npm package version, a Run's `protocolVersion` / `schemaVersion`, and a Workflow's `id` / `version` are separate contracts. Updating the npm package does not automatically update definitions pinned by active Runs or migrate old changes.

@@ -170,7 +170,7 @@ JSON Schema 或业务验证器拒绝 Outcome 时，Runtime 将原始结果、结
 
 结果已绑定到 Action，但验证器抛错或工作流转移处理失败时，Runtime 同样会先保存原始 Outcome，并返回 `OUTCOME_PROCESSING_ERROR`；失败的推进不会留下部分输出或新步骤。宿主应先检查错误与外部副作用，再用新的 `outcomeId` 提交修正结果。若执行器返回的值本身无法序列化，Runtime 无法保存该值，会将 Action 标为结果未知，要求宿主核对。
 
-`createFileRuntimeStore` 将每个 Run 写成不可变、有序的 revision 快照，并用原子排他发布及 CAS 避免并发写互相覆盖；`createMemoryRuntimeStore` 适合测试或单进程短任务。若文件系统不支持所需的硬链接原子发布，FileStore 明确报错，不能作为共享网络文件系统上的分布式锁使用。
+`createFileRuntimeStore` 为每个 Run 保存固定格式标记和带内容校验的当前 checkpoint。写入在可恢复的跨进程锁内比较 revision，再原子发布；revision 保持单调递增，不再为每次修改保留完整历史文件。旧编号快照先通过连续性和内容校验、阻断旧路径写入，才转换为当前 checkpoint。`createMemoryRuntimeStore` 适合测试或单进程短任务。FileStore 依赖受支持的本机文件系统原子操作，不能作为共享网络文件系统上的分布式锁使用。存储布局和恢复条件见[本机 Runtime 存储](./runtime-local-storage.zh.md)。
 
 Run 会持久化输入、Action 输入、Outcome 输出和提案内容；不要把访问令牌、API key 等凭据放进这些字段。由宿主的秘密管理机制在执行边界按需注入；`RuntimeInvocationContext` 不写入 Run 快照。
 

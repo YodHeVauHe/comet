@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createFileRuntimeStore } from '../../../domains/engine/runtime-store.js';
 
 import {
   assertWorkspaceRuntimeMigrationQuiescent,
@@ -42,6 +43,32 @@ afterEach(async () => {
 });
 
 describe('workspace runtime resolution and migration', () => {
+  it.runIf(process.platform === 'win32')(
+    'reads the same saved run and lock through a Windows case alias',
+    async (context) => {
+      const alias = path.join(temporary, 'Project');
+      try {
+        await fs.stat(alias);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+          context.skip('当前目录区分大小写，不存在同目录大小写别名');
+        throw error;
+      }
+      const runtime = await resolveWorkspaceRuntimeRoot(project);
+      const record = { runId: 'retained', revision: 1, state: { progress: 'saved' } };
+      const store = (root: string) => createFileRuntimeStore({ rootDir: path.join(root, 'runs') });
+      expect(await store(runtime).compareAndSwap(record.runId, null, record)).toBe(true);
+      await write(path.join(runtime, 'saved-run.lock'), 'same execution owner');
+      const reopened = await resolveWorkspaceRuntimeRoot(alias);
+      expect(reopened).toBe(runtime);
+      expect(resolveWorkspaceRuntimeRootSync(alias)).toBe(runtime);
+      expect(await store(reopened).read(record.runId)).toEqual(record);
+      expect(await fs.readFile(path.join(reopened, 'saved-run.lock'), 'utf8')).toBe(
+        'same execution owner',
+      );
+    },
+  );
+
   it('validates the volume root without attempting mkdir when the root would reject it', async () => {
     const volumeRoot = path.parse(data).root;
     const mkdir = fs.mkdir.bind(fs);

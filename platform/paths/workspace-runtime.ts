@@ -15,12 +15,17 @@ function directoryGeneration(stat: BigIntStats): string {
   return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
 }
 
+/** Windows 原生解析返回磁盘上的实际大小写，避免同一目录产生不同身份。 */
+function canonicalExistingPath(target: string): string {
+  return process.platform === 'win32' ? realpathSync.native(target) : realpathSync(target);
+}
+
 /** 工作区身份关联这份 checkout 的创建实例；远端地址、分支和修改时间均不参与。 */
 export function resolveWorkspaceIdentity(projectRoot: string): {
   projectRoot: string;
   workspaceId: string;
 } {
-  const root = realpathSync(path.resolve(projectRoot));
+  const root = canonicalExistingPath(path.resolve(projectRoot));
   const rootStat = lstatSync(root, { bigint: true });
   if (!rootStat.isDirectory()) throw new Error(`工作区必须是目录：${projectRoot}`);
   const rootGeneration = directoryGeneration(rootStat);
@@ -39,13 +44,13 @@ export function resolveWorkspaceIdentity(projectRoot: string): {
     const stat = lstatSync(dotGit);
     if (stat.isSymbolicLink()) throw new Error(`工作区 .git 不能是符号链接：${dotGit}`);
     if (stat.isDirectory()) {
-      gitDirectory = realpathSync(dotGit);
+      gitDirectory = canonicalExistingPath(dotGit);
       gitGeneration = directoryGeneration(lstatSync(gitDirectory, { bigint: true }));
     } else if (stat.isFile()) {
       if (stat.size > 16 * 1024) throw new Error(`工作区 .git 文件过大：${dotGit}`);
       const match = /^gitdir: (.+)\r?\n?$/u.exec(readFileSync(dotGit, 'utf8'));
       if (!match) throw new Error(`工作区 .git 文件格式无效：${dotGit}`);
-      gitDirectory = realpathSync(path.resolve(root, match[1].trim()));
+      gitDirectory = canonicalExistingPath(path.resolve(root, match[1].trim()));
       const gitStat = lstatSync(gitDirectory, { bigint: true });
       if (!gitStat.isDirectory()) throw new Error(`工作区 Git 元数据必须是目录：${gitDirectory}`);
       gitGeneration = directoryGeneration(gitStat);
@@ -71,7 +76,7 @@ function canonicalParent(target: string): string {
   const parent = path.dirname(target);
   if (parent === target) return target;
   try {
-    return path.join(realpathSync(parent), path.basename(target));
+    return path.join(canonicalExistingPath(parent), path.basename(target));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     return path.join(canonicalParent(parent), path.basename(target));

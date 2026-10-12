@@ -44,6 +44,23 @@ describe('workspace runtime identity', () => {
     expect(resolveWorkspaceIdentity(alias)).toEqual(resolveWorkspaceIdentity(project));
   });
 
+  it.runIf(process.platform === 'win32').for([false, true])(
+    'keeps one workspace identity through Windows case aliases (Git=%s)',
+    async (gitProject, context) => {
+      const alias = path.join(temporary, 'Project');
+      try {
+        await fs.stat(alias);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+          context.skip('当前目录区分大小写，不存在同目录大小写别名');
+        throw error;
+      }
+      if (gitProject) execFileSync('git', ['-C', project, 'init'], { stdio: 'pipe' });
+      expect(resolveWorkspaceIdentity(alias)).toEqual(resolveWorkspaceIdentity(project));
+      expect(resolveWorkspaceRuntimeRootSync(alias)).toBe(resolveWorkspaceRuntimeRootSync(project));
+    },
+  );
+
   it('isolates clones with the same origin and linked Git worktrees', async () => {
     const git = (root: string, ...args: string[]) =>
       execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
@@ -79,6 +96,37 @@ describe('workspace runtime identity', () => {
       resolveWorkspaceRuntimeRootSync(project),
     );
   });
+
+  it.runIf(process.platform === 'win32')(
+    'keeps linked-worktree identity through equivalent Git metadata path casing',
+    async () => {
+      const git = (root: string, ...args: string[]) =>
+        execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
+      git(project, 'init');
+      git(
+        project,
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.test',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'initial',
+      );
+      const worktree = path.join(temporary, 'linked');
+      git(project, 'worktree', 'add', '-b', 'child', worktree);
+      const before = resolveWorkspaceIdentity(worktree);
+      const pointer = path.join(worktree, '.git');
+      const original = await fs.readFile(pointer, 'utf8');
+      const alias = original.replace(/([\\/])worktrees([\\/])/u, '$1WORKTREES$2');
+      expect(alias).not.toBe(original);
+      // Git 的 Windows .git 指针可能带隐藏属性；等长替换不重新创建或截断文件。
+      expect(Buffer.byteLength(alias)).toBe(Buffer.byteLength(original));
+      await fs.writeFile(pointer, alias, { flag: 'r+' });
+      expect(resolveWorkspaceIdentity(worktree)).toEqual(before);
+    },
+  );
 
   it('refuses broken worktree metadata rather than changing identity silently', async () => {
     await fs.writeFile(path.join(project, '.git'), 'gitdir: /missing-comet-worktree-metadata\n');
