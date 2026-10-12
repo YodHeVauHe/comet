@@ -14,7 +14,7 @@ let temporary: string;
 let project: string;
 
 beforeEach(async () => {
-  temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-workspace-path-'));
+  temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'comet-workspace-path-')));
   project = path.join(temporary, 'project');
   await fs.mkdir(project);
   vi.stubEnv('COMET_DATA_DIR', path.join(temporary, 'home-data'));
