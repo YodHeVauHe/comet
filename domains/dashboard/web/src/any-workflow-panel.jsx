@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useDashboardMotion } from './dashboard-motion.jsx';
 import {
   Alert,
   Button,
@@ -81,6 +82,7 @@ export function AnyWorkflowPanel({
   demo = false,
 }) {
   useDashboardLanguage();
+  const pageMotion = useDashboardMotion('any', 'page');
   const route = useDashboardNavigation();
   const [page, setPage] = useState(null),
     [pageError, setPageError] = useState(null),
@@ -98,6 +100,8 @@ export function AnyWorkflowPanel({
   const [tab, setTab] = useState(() =>
     route.workflow === 'any' ? (route.runTab ?? 'steps') : 'steps',
   );
+  const runMotion = useDashboardMotion(locator, 'panel');
+  const tabMotion = useDashboardMotion(`${locator}:${tab}`, 'tab');
   const [filter, setFilter] = useState('all'),
     [scope, setScope] = useState('all'),
     [search, setSearch] = useState(query),
@@ -511,7 +515,12 @@ export function AnyWorkflowPanel({
   const missing = Boolean(detailError && detailError.status === 404);
 
   return (
-    <section className="any-workspace" aria-label={t('Comet Any 工作区')}>
+    <section
+      ref={pageMotion}
+      className="any-workspace"
+      data-dashboard-motion="page"
+      aria-label={t('Comet Any 工作区')}
+    >
       <header className="any-page-title">
         <div>
           <small>WORKFLOW APPLICATIONS</small>
@@ -698,7 +707,7 @@ export function AnyWorkflowPanel({
             </div>
           ) : (
             <>
-              <div className="any-run-header">
+              <div ref={runMotion} className="any-run-header" data-dashboard-motion="panel">
                 <div className="any-run-title">
                   <div>
                     <small>
@@ -907,77 +916,83 @@ export function AnyWorkflowPanel({
                       { key: 'evidence', label: t('版本与证据') },
                     ]}
                   />
-                  {tab === 'steps' && (
-                    <ApplicationStepList
-                      steps={steps}
-                      locator={locator}
-                      recordId={recordId}
-                      expanded={expanded}
-                      setExpanded={setExpanded}
-                      selectRecord={selectRecord}
-                    />
-                  )}
-                  {tab === 'history' && (
-                    <div className="any-history">
-                      {[...detail.records].reverse().map((r) => (
-                        <button
-                          key={r.id}
-                          id={`any-record-${r.id}`}
-                          data-record-id={r.id}
-                          className={recordId === r.id ? 'selected' : ''}
-                          onClick={() => selectRecord(r)}
-                        >
-                          <span className="any-sequence">
-                            {r.sequence === null ? '—' : `#${r.sequence}`}
-                          </span>
-                          <span>
-                            <b>{r.title === r.stepId ? r.title : t(r.title)}</b>
-                            <small>
-                              {r.type} ·{' '}
-                              {r.attempt === null ? t('等待记录') : t('尝试 {0}', [r.attempt])}
-                            </small>
-                          </span>
-                          <ApplicationStatus value={r.status} />
-                          <RightOutlined />
-                        </button>
-                      ))}
-                      <p className="any-footnote">
-                        {t('按 SDK 记录顺序展示；旧尝试的完整输入输出可能未被保存。')}
-                      </p>
-                    </div>
-                  )}
-                  {tab === 'artifacts' && (
-                    <div className="any-artifact-list">
-                      {detail.artifacts.map((a) => (
-                        <button
-                          key={a.id}
-                          disabled={artifactLoading === a.id}
-                          onClick={() => openArtifact(a)}
-                        >
-                          <FileTextOutlined />
-                          <span>
-                            <b>{a.label}</b>
-                            <small>{a.uri ?? t('保存的输出快照')}</small>
-                          </span>
-                          <RightOutlined />
-                        </button>
-                      ))}
-                      {!detail.artifacts.length && (
-                        <Empty
-                          description={t('尚未收到产物')}
-                          image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        />
-                      )}
-                    </div>
-                  )}
-                  {tab === 'evidence' && (
-                    <ApplicationEvidenceView
-                      detail={detail}
-                      onEvidence={openEvidence}
-                      onSource={chooseRun}
-                      onEval={openEval}
-                    />
-                  )}
+                  <div
+                    ref={tabMotion}
+                    className="dashboard-motion-surface any-tab-content"
+                    data-dashboard-motion="tab"
+                  >
+                    {tab === 'steps' && (
+                      <ApplicationStepList
+                        steps={steps}
+                        locator={locator}
+                        recordId={recordId}
+                        expanded={expanded}
+                        setExpanded={setExpanded}
+                        selectRecord={selectRecord}
+                      />
+                    )}
+                    {tab === 'history' && (
+                      <div className="any-history">
+                        {[...detail.records].reverse().map((r) => (
+                          <button
+                            key={r.id}
+                            id={`any-record-${r.id}`}
+                            data-record-id={r.id}
+                            className={recordId === r.id ? 'selected' : ''}
+                            onClick={() => selectRecord(r)}
+                          >
+                            <span className="any-sequence">
+                              {r.sequence === null ? '—' : `#${r.sequence}`}
+                            </span>
+                            <span>
+                              <b>{r.title === r.stepId ? r.title : t(r.title)}</b>
+                              <small>
+                                {r.type} ·{' '}
+                                {r.attempt === null ? t('等待记录') : t('尝试 {0}', [r.attempt])}
+                              </small>
+                            </span>
+                            <ApplicationStatus value={r.status} />
+                            <RightOutlined />
+                          </button>
+                        ))}
+                        <p className="any-footnote">
+                          {t('按 SDK 记录顺序展示；旧尝试的完整输入输出可能未被保存。')}
+                        </p>
+                      </div>
+                    )}
+                    {tab === 'artifacts' && (
+                      <div className="any-artifact-list">
+                        {detail.artifacts.map((a) => (
+                          <button
+                            key={a.id}
+                            disabled={artifactLoading === a.id}
+                            onClick={() => openArtifact(a)}
+                          >
+                            <FileTextOutlined />
+                            <span>
+                              <b>{a.label}</b>
+                              <small>{a.uri ?? t('保存的输出快照')}</small>
+                            </span>
+                            <RightOutlined />
+                          </button>
+                        ))}
+                        {!detail.artifacts.length && (
+                          <Empty
+                            description={t('尚未收到产物')}
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          />
+                        )}
+                      </div>
+                    )}
+                    {tab === 'evidence' && (
+                      <ApplicationEvidenceView
+                        detail={detail}
+                        onEvidence={openEvidence}
+                        onSource={chooseRun}
+                        onEval={openEval}
+                      />
+                    )}
+                  </div>
                   {detail.relatedChange && (
                     <div className="any-related">
                       <Button type="link" onClick={() => onRelatedChange?.(detail.relatedChange)}>
@@ -999,6 +1014,7 @@ export function AnyWorkflowPanel({
       </p>
       <Drawer
         title={t('步骤与验证详情')}
+        rootClassName="any-detail-drawer"
         open={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
         size={420}
@@ -1007,6 +1023,7 @@ export function AnyWorkflowPanel({
       </Drawer>
       <Drawer
         title={drawer?.title}
+        rootClassName="any-detail-drawer"
         open={Boolean(drawer)}
         onClose={() => setDrawer(null)}
         size={530}

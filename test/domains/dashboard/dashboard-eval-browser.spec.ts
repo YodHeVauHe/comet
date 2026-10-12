@@ -59,6 +59,59 @@ const run = {
   diagnostics: [],
 };
 test.describe('Dashboard Eval', () => {
+  test('animates view and tab changes without replaying on refresh or reduced motion', async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      (window as any).dashboardMotionCalls = [];
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (...args: Parameters<typeof animate>) {
+        if (this.hasAttribute('data-dashboard-motion'))
+          (window as any).dashboardMotionCalls.push(this.getAttribute('data-dashboard-motion'));
+        return animate.apply(this, args);
+      };
+    });
+    await page.reload();
+    await page.getByRole('button', { name: 'writer', exact: true }).click();
+    await page.getByRole('tab', { name: '用例结果', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'clarify', exact: true })).toBeVisible();
+    const surface = page
+      .getByRole('tabpanel', { name: '用例结果', exact: true })
+      .locator('[data-dashboard-motion="tab"]');
+    await expect.poll(() => surface.evaluate((element) => element.getAnimations().length)).toBe(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as any).dashboardMotionCalls.filter((kind: string) => kind === 'tab').length,
+        ),
+      )
+      .toBeGreaterThan(1);
+    const count = await page.evaluate(() => (window as any).dashboardMotionCalls.length);
+    await surface.evaluate((element) => {
+      (window as any).readingSurface = element;
+    });
+    await page.getByRole('button', { name: '立即刷新', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'clarify', exact: true })).toBeVisible();
+    expect(await surface.evaluate((element) => element === (window as any).readingSurface)).toBe(
+      true,
+    );
+    expect(await page.evaluate(() => (window as any).dashboardMotionCalls.length)).toBe(count);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.getByRole('tab', { name: '结果概览', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '结果概览', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(await page.evaluate(() => (window as any).dashboardMotionCalls.length)).toBe(count);
+    expect(
+      await page
+        .getByRole('tabpanel', { name: '结果概览', exact: true })
+        .locator('[data-dashboard-motion="tab"]')
+        .evaluate((element) => element.getAnimations().length),
+    ).toBe(0);
+  });
+
   test('keeps a clean root URL while restoring Eval details on reload and history navigation', async ({
     page,
   }) => {

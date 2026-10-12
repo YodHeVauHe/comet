@@ -1,4 +1,5 @@
 import React from 'react';
+import { useDashboardMotion } from './dashboard-motion.jsx';
 import { Button, Collapse, Tag, Descriptions, Empty, Alert } from 'antd';
 import {
   FileTextOutlined,
@@ -100,6 +101,10 @@ export function ApplicationRecordInspector({
   onEvidenceTab,
   onAttempt,
 }) {
+  const motion = useDashboardMotion(
+    `${detail?.summary?.locator ?? ''}:${record?.id ?? ''}`,
+    'detail',
+  );
   if (!detail)
     return (
       <div className="any-inspector-empty">
@@ -159,7 +164,7 @@ export function ApplicationRecordInspector({
   ];
   const artifacts = detail.artifacts.filter((a) => a.recordId === record.id);
   return (
-    <div className="any-inspector-inner">
+    <div ref={motion} className="any-inspector-inner" data-dashboard-motion="detail">
       <div className="any-panel-heading">
         <b>{t('步骤详情')}</b>
         <span>{t(kindLabels[record.kind])}</span>

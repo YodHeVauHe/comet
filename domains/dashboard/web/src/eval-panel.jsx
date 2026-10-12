@@ -41,6 +41,7 @@ import {
 } from '@ant-design/icons';
 import { renderMarkdown } from './markdown-preview.js';
 import './eval-panel.css';
+import { DashboardMotion, useDashboardMotion } from './dashboard-motion.jsx';
 import {
   EvalFirstUse,
   EvalErrorGuide,
@@ -183,6 +184,7 @@ export function EvalPanel({
     navigation.runId ? 'detail' : navigation.mode === 'new' ? 'new' : 'list',
   );
   const [selectedId, setSelectedId] = useState(() => navigation.runId);
+  const pageMotion = useDashboardMotion(`${mode}:${selectedId ?? ''}`, 'page');
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [tab, setTab] = useState('overview');
@@ -742,7 +744,12 @@ export function EvalPanel({
     label: `${run.target.name} · ${run.target.version ?? '—'} · ${run.id}`,
   });
   return (
-    <section className="dashboard-eval-page" aria-label={t('Eval 工作台')}>
+    <section
+      ref={pageMotion}
+      className="dashboard-eval-page"
+      data-dashboard-motion="page"
+      aria-label={t('Eval 工作台')}
+    >
       <EvalGuideDrawer
         open={guideOpen}
         onClose={() => setGuideOpen(false)}
@@ -1054,7 +1061,17 @@ export function EvalPanel({
                   label: t('执行配置'),
                   children: <EvalConfiguration run={detail} />,
                 },
-              ]}
+              ].map((item) => ({
+                ...item,
+                children: (
+                  <DashboardMotion
+                    motionKey={`${selectedId}:${item.key}`}
+                    active={tab === item.key}
+                  >
+                    {item.children}
+                  </DashboardMotion>
+                ),
+              }))}
             />
           </Spin>
         </div>
@@ -1161,6 +1178,7 @@ function EvalCreate({
   useDashboardFormLanguage(form);
   const { message } = App.useApp();
   const [step, setStep] = useState(initialConfig && !reviewTarget ? 2 : 0);
+  const stepMotion = useDashboardMotion(step, 'panel');
   const [seedConfig, setSeedConfig] = useState(initialConfig);
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -1311,7 +1329,11 @@ function EvalCreate({
     (run) => run.isBaseline && run.baselineEligible && preview?.target.id === run.target.id,
   );
   return (
-    <div className="dashboard-eval-stack dashboard-eval-create">
+    <div
+      ref={stepMotion}
+      className="dashboard-eval-stack dashboard-eval-create"
+      data-dashboard-motion="panel"
+    >
       <div className="dashboard-eval-heading dashboard-eval-masthead">
         <div>
           <Text className="dashboard-eval-eyebrow">{t('EVAL / 新运行')}</Text>

@@ -130,3 +130,56 @@ test('Any early creation and the mobile inspector remain usable without horizont
     ),
   ).toBe(true);
 });
+
+test('Any transitions preserve the reading surface on refresh and respect reduced motion', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.addInitScript(() => {
+    (window as any).dashboardMotionCalls = [];
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args: Parameters<typeof animate>) {
+      if (this.hasAttribute('data-dashboard-motion'))
+        (window as any).dashboardMotionCalls.push(this.getAttribute('data-dashboard-motion'));
+      return animate.apply(this, args);
+    };
+  });
+  await page.goto('/?demo');
+  await page.getByRole('menuitem', { name: 'Comet Any' }).click();
+  await expect(page.locator('.any-tabs')).toBeVisible();
+  await page.getByRole('tab', { name: '执行记录', exact: true }).click();
+  await expect(page.locator('.any-history')).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as any).dashboardMotionCalls.filter((kind: string) => kind === 'tab').length,
+      ),
+    )
+    .toBeGreaterThan(1);
+  await expect
+    .poll(() =>
+      page.locator('.any-tab-content').evaluate((element) => element.getAnimations().length),
+    )
+    .toBe(0);
+  const count = await page.evaluate(() => (window as any).dashboardMotionCalls.length);
+  const history = page.locator('.any-history');
+  await history.evaluate((element) => {
+    (window as any).readingSurface = element;
+  });
+  await page.getByRole('button', { name: '立即刷新', exact: true }).click();
+  await expect(history).toBeVisible();
+  expect(await history.evaluate((element) => element === (window as any).readingSurface)).toBe(
+    true,
+  );
+  expect(await page.evaluate(() => (window as any).dashboardMotionCalls.length)).toBe(count);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('tab', { name: '步骤', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '步骤', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  expect(await page.evaluate(() => (window as any).dashboardMotionCalls.length)).toBe(count);
+  expect(
+    await page.locator('.any-tab-content').evaluate((element) => element.getAnimations().length),
+  ).toBe(0);
+});
