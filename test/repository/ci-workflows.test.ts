@@ -68,6 +68,15 @@ describe('CI workflows', () => {
     expect(commands).toContain('test/platform/dsh-profiles.test.ts');
   });
 
+  it('exercises workspace identity and storage regressions on every runtime OS', async () => {
+    const workflow = parse(await readWorkflow('ci.yml'));
+    const runtime = workflow.jobs['runtime-smoke'];
+    expect(runtime.strategy.matrix.os).toEqual(['ubuntu-latest', 'macos-latest', 'windows-latest']);
+    const commands = runtime.steps.map((step: { run?: string }) => step.run ?? '').join('\n');
+    expect(commands).toContain('test/platform/workspace-runtime.test.ts');
+    expect(commands).toContain('test/domains/workflow-contract/workspace-runtime.test.ts');
+  });
+
   it('runs the required CI contract for every pull request', async () => {
     const workflow = await readWorkflow('ci.yml');
     const packageJson = JSON.parse(await fs.readFile('package.json', 'utf8')) as {
