@@ -54,6 +54,14 @@ interface DoctorPayload {
     status: string;
     repairable: boolean;
     remediation: string | null;
+    mcpStatus?: string;
+    agents?: Array<{
+      id: string;
+      registered: boolean | 'unknown';
+      valid: boolean;
+      effective: boolean;
+      detail: string;
+    }>;
   };
   runtime?: {
     isSecondaryWorktree: boolean;
@@ -702,6 +710,102 @@ describe('doctor command', () => {
     } finally {
       process.env.PATH = previousPath;
     }
+  });
+
+  it('reports an OpenCode v2 CodeGraph server when JSONC globs contain comment markers', async () => {
+    const homeDir = path.join(tmpDir, 'codegraph-home');
+    const binDir = path.join(tmpDir, 'codegraph-bin');
+    const executable =
+      process.platform === 'win32'
+        ? path.join(binDir, 'codegraph.cmd')
+        : path.join(binDir, 'codegraph');
+    await fs.mkdir(path.join(tmpDir, '.codegraph'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, '.codegraph', 'codegraph.db'), '');
+    const configDir = path.join(homeDir, '.config', 'opencode');
+    await fs.mkdir(configDir, { recursive: true });
+    const configPath = path.join(configDir, 'opencode.jsonc');
+    await fs.writeFile(
+      configPath,
+      `{
+  "path": "/mnt/**",
+  "mcp": {
+    "servers": {
+      "codegraph": {
+        "type": "local",
+        "command": ["codegraph", "serve", "--mcp"],
+        "enabled": true
+      }
+    }
+  },
+  "permission": { "ask": { "*/.ssh/*": "ask" } },
+}
+`,
+    );
+    await fs.mkdir(binDir, { recursive: true });
+    const status =
+      '{"initialized":true,"pendingChanges":{"added":0,"modified":0,"removed":0},"index":{"state":"complete","reindexRecommended":false,"pendingRefs":0}}';
+    const script =
+      process.platform === 'win32'
+        ? `@echo off\r\nif "%1"=="status" echo ${status}\r\n`
+        : `#!/bin/sh\nif [ "$1" = "status" ]; then printf '%s\\n' '${status}'; fi\n`;
+    await fs.writeFile(executable, script);
+    if (process.platform !== 'win32') await fs.chmod(executable, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ''}`;
+    try {
+      await writeProjectConfig(tmpDir, defaultProjectConfig('docs'));
+
+      const payload = await collectDoctorPayload(tmpDir, 'project', homeDir);
+
+      expect(payload.codegraph?.agents).toContainEqual(
+        expect.objectContaining({
+          id: 'opencode',
+          registered: true,
+          valid: true,
+          effective: true,
+          detail: expect.stringContaining('is registered'),
+        }),
+      );
+      expect(payload.results).toContainEqual(
+        expect.objectContaining({
+          check: 'CodeGraph MCP registration',
+          status: 'pass',
+          message: expect.stringContaining('OpenCode: registered'),
+        }),
+      );
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  it('reports an unreadable OpenCode config separately from a missing CodeGraph registration', async () => {
+    const homeDir = path.join(tmpDir, 'codegraph-home');
+    const configDir = path.join(homeDir, '.config', 'opencode');
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(configDir, 'opencode.jsonc'),
+      '{ "mcp": { "servers": { "codegraph": { "command": "codegraph" } } }',
+    );
+    await writeProjectConfig(tmpDir, defaultProjectConfig('docs'));
+
+    const payload = await collectDoctorPayload(tmpDir, 'project', homeDir);
+
+    expect(payload.codegraph?.mcpStatus).toBe('unavailable');
+    expect(payload.codegraph?.agents).toContainEqual(
+      expect.objectContaining({
+        id: 'opencode',
+        registered: 'unknown',
+        valid: false,
+        effective: false,
+      }),
+    );
+    expect(payload.results).toContainEqual(
+      expect.objectContaining({
+        check: 'CodeGraph MCP registration',
+        status: 'warn',
+        message: expect.stringContaining('OpenCode: unreadable config'),
+      }),
+    );
   });
 
   it('reports allowed Classic recovery strategies and never chooses one implicitly', async () => {

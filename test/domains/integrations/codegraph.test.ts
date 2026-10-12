@@ -457,6 +457,211 @@ describe('codegraph', () => {
     );
   });
 
+  function writeOpencodeConfig(
+    homeDir: string,
+    source: string,
+    fileName = 'opencode.jsonc',
+  ): string {
+    const configDir = path.join(homeDir, '.config', 'opencode');
+    fs.mkdirSync(configDir, { recursive: true });
+    const configPath = path.join(configDir, fileName);
+    fs.writeFileSync(configPath, source);
+    return configPath;
+  }
+
+  it('reports an OpenCode v2 mcp.servers CodeGraph entry as registered and effective', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    writeReadyCodegraphIndex();
+    const configPath = writeOpencodeConfig(
+      homeDir,
+      JSON.stringify({
+        mcp: {
+          servers: {
+            codegraph: {
+              type: 'local',
+              command: ['codegraph', 'serve', '--mcp'],
+              enabled: true,
+            },
+          },
+        },
+      }),
+    );
+    mockReadyCodegraphCli();
+
+    const { inspectCodegraphIntegration } =
+      await import('../../../domains/integrations/codegraph.js');
+    const result = inspectCodegraphIntegration(tmpDir, 'project', homeDir);
+
+    expect(result).toMatchObject({
+      cliStatus: 'installed',
+      indexStatus: 'current',
+      mcpStatus: 'registered',
+      effectiveForAgent: { opencode: true },
+    });
+    expect(result.agents).toContainEqual(
+      expect.objectContaining({
+        id: 'opencode',
+        scope: 'global',
+        configPath,
+        registered: true,
+        valid: true,
+        effective: true,
+        detail: expect.stringContaining('is registered'),
+      }),
+    );
+  });
+
+  it('keeps an OpenCode CodeGraph entry when permission globs contain comment markers', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    writeReadyCodegraphIndex();
+    const configPath = writeOpencodeConfig(
+      homeDir,
+      `{
+  "path": "/mnt/**",
+  "mcp": {
+    "servers": {
+      "codegraph": {
+        "type": "local",
+        "command": ["codegraph", "serve", "--mcp"],
+        "enabled": true
+      }
+    }
+  },
+  "permission": {
+    "read": { "*": "allow", "/mnt/**": "allow" },
+    "ask": { "*/.ssh/*": "ask" }
+  },
+}
+`,
+    );
+    mockReadyCodegraphCli();
+
+    const { inspectCodegraphIntegration } =
+      await import('../../../domains/integrations/codegraph.js');
+    const result = inspectCodegraphIntegration(tmpDir, 'project', homeDir);
+    const opencode = result.agents.find((agent) => agent.id === 'opencode');
+
+    expect(opencode).toMatchObject({
+      scope: 'global',
+      configPath,
+      registered: true,
+      valid: true,
+      effective: true,
+      detail: expect.stringContaining('is registered'),
+    });
+  });
+
+  it('still reads JSONC comments and a flat OpenCode v1 mcp.codegraph entry', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    writeReadyCodegraphIndex();
+    const configPath = writeOpencodeConfig(
+      homeDir,
+      `{
+  // OpenCode v1 keeps the server directly under mcp
+  "mcp": {
+    /* local CodeGraph server */
+    "codegraph": { "command": "codegraph", "args": ["serve", "--mcp"], },
+  },
+}
+`,
+    );
+    mockReadyCodegraphCli();
+
+    const { inspectCodegraphIntegration } =
+      await import('../../../domains/integrations/codegraph.js');
+    const result = inspectCodegraphIntegration(tmpDir, 'project', homeDir);
+
+    expect(result.agents).toContainEqual(
+      expect.objectContaining({
+        id: 'opencode',
+        configPath,
+        registered: true,
+        valid: true,
+        effective: true,
+      }),
+    );
+  });
+
+  it('prefers a readable OpenCode config when a sibling file cannot be parsed', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    writeReadyCodegraphIndex();
+    writeOpencodeConfig(homeDir, '{ this is not json');
+    const configPath = writeOpencodeConfig(
+      homeDir,
+      JSON.stringify({
+        mcp: { servers: { codegraph: { command: ['codegraph', 'serve', '--mcp'] } } },
+      }),
+      'opencode.json',
+    );
+    mockReadyCodegraphCli();
+
+    const { inspectCodegraphIntegration } =
+      await import('../../../domains/integrations/codegraph.js');
+    const result = inspectCodegraphIntegration(tmpDir, 'project', homeDir);
+
+    expect(result.agents).toContainEqual(
+      expect.objectContaining({
+        id: 'opencode',
+        configPath,
+        registered: true,
+        valid: true,
+        effective: true,
+      }),
+    );
+  });
+
+  it('reports an unreadable OpenCode config as unknown instead of unregistered', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    writeReadyCodegraphIndex();
+    const configPath = writeOpencodeConfig(
+      homeDir,
+      '{ "mcp": { "servers": { "codegraph": { "command": "codegraph" } } }',
+    );
+    mockReadyCodegraphCli();
+
+    const { inspectCodegraphIntegration } =
+      await import('../../../domains/integrations/codegraph.js');
+    const result = inspectCodegraphIntegration(tmpDir, 'project', homeDir);
+
+    expect(result.mcpStatus).toBe('unavailable');
+    expect(result.effectiveForAgent).toMatchObject({ opencode: false });
+    expect(result.agents).toContainEqual(
+      expect.objectContaining({
+        id: 'opencode',
+        configPath,
+        registered: 'unknown',
+        valid: false,
+        effective: false,
+        detail: expect.stringContaining(`unable to read ${configPath}`),
+      }),
+    );
+  });
+
+  it('reports an OpenCode config without CodeGraph as not registered', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    writeReadyCodegraphIndex();
+    const configPath = writeOpencodeConfig(
+      homeDir,
+      JSON.stringify({ mcp: { servers: { other: { command: 'other' } } } }),
+    );
+    mockReadyCodegraphCli();
+
+    const { inspectCodegraphIntegration } =
+      await import('../../../domains/integrations/codegraph.js');
+    const result = inspectCodegraphIntegration(tmpDir, 'project', homeDir);
+
+    expect(result.mcpStatus).toBe('not_registered');
+    expect(result.agents).toContainEqual(
+      expect.objectContaining({
+        id: 'opencode',
+        configPath,
+        registered: false,
+        effective: false,
+        detail: expect.stringContaining('is not registered'),
+      }),
+    );
+  });
+
   it.each([
     ['project_not_initialized', 'init'],
     ['index_incomplete', 'index'],
