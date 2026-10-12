@@ -4755,6 +4755,64 @@ test('keeps long project names discoverable without widening the selector', asyn
   await expect(projectOption).toHaveAttribute('title', longProjectName);
 });
 
+for (const workspace of ['个人记忆', '项目知识'] as const) {
+  test(`${workspace} transitions preserve input and respect reduced motion`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.addInitScript(() => {
+      (window as any).dashboardMotionCalls = [];
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (...args: Parameters<typeof animate>) {
+        if (this.hasAttribute('data-dashboard-motion'))
+          (window as any).dashboardMotionCalls.push(this.getAttribute('data-dashboard-motion'));
+        return animate.apply(this, args);
+      };
+    });
+    await page.goto('/?demo');
+    await page.getByRole('menuitem', { name: workspace }).click();
+    const personal = workspace === '个人记忆';
+    const surface = page.locator(
+      personal ? '.dashboard-tool-page-memory' : '.dashboard-tool-page-knowledge',
+    );
+    await expect(surface).toBeVisible();
+    const before = await page.evaluate(() => (window as any).dashboardMotionCalls.length);
+    if (personal) {
+      await surface
+        .locator('.dashboard-memory-filter-rail button')
+        .filter({ hasText: '协作约定' })
+        .click();
+      await expect(surface.getByRole('region', { name: '个人记忆列表' })).toContainText('协作约定');
+    } else {
+      await page.getByRole('tab', { name: '项目规范', exact: true }).click();
+      await expect(page.getByRole('tab', { name: '项目规范', exact: true })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+    }
+    await expect
+      .poll(() => page.evaluate(() => (window as any).dashboardMotionCalls.length))
+      .toBeGreaterThan(before);
+    const search = page.getByLabel(personal ? '搜索个人记忆' : '搜索项目知识记录');
+    await search.fill('Dashboard');
+    await search.fill('');
+    const count = await page.evaluate(() => (window as any).dashboardMotionCalls.length);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    if (personal)
+      await surface
+        .locator('.dashboard-memory-filter-rail button')
+        .filter({ hasText: '全部记忆' })
+        .click();
+    else await page.getByRole('tab', { name: '项目概况', exact: true }).click();
+    expect(await page.evaluate(() => (window as any).dashboardMotionCalls.length)).toBe(count);
+    expect(
+      await surface.evaluate((element) => element.getAnimations({ subtree: true }).length),
+    ).toBe(0);
+    await search.fill('Dashboard');
+    await page.getByRole('button', { name: '立即刷新', exact: true }).click();
+    await expect(search).toHaveValue('Dashboard');
+    expect(await page.evaluate(() => (window as any).dashboardMotionCalls.length)).toBe(count);
+  });
+}
+
 test('shows the project memory tab on the demo knowledge page', async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
@@ -4961,6 +5019,14 @@ test('scrolls a long project memory list inside the knowledge page', async ({ pa
 
 for (const scenario of ['stable reads', 'loading spacing'] as const) {
   test(`project memory detail ${scenario}`, async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).memoryMotionCount = 0;
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (...args: Parameters<typeof animate>) {
+        if (this.hasAttribute('data-dashboard-motion')) (window as any).memoryMotionCount++;
+        return animate.apply(this, args);
+      };
+    });
     let reads = 0;
     let holdReads = scenario === 'loading spacing';
     let releaseRead: () => void = () => {};
@@ -5111,6 +5177,10 @@ for (const scenario of ['stable reads', 'loading spacing'] as const) {
       }
     } else {
       await expect(inspector.locator('.dashboard-project-memory-body')).toHaveText(entries[0].body);
+      const motionCount = await page.evaluate(() => (window as any).memoryMotionCount);
+      await inspector.evaluate((element) => {
+        (window as any).memoryReadingSurface = element;
+      });
       await page.clock.runFor(31_000);
       await page.waitForTimeout(700);
       expect(reads).toBe(1);
@@ -5119,6 +5189,10 @@ for (const scenario of ['stable reads', 'loading spacing'] as const) {
       await page.clock.runFor(31_000);
       await expect(page.getByRole('region', { name: '项目记忆列表' })).toContainText('3 条');
       expect(reads).toBe(1);
+      expect(await page.evaluate(() => (window as any).memoryMotionCount)).toBe(motionCount);
+      expect(
+        await inspector.evaluate((element) => element === (window as any).memoryReadingSurface),
+      ).toBe(true);
 
       holdReads = true;
       const previousBody = entries[0].body;
@@ -5130,12 +5204,16 @@ for (const scenario of ['stable reads', 'loading spacing'] as const) {
       await expect(inspector.locator('.ant-skeleton')).toHaveCount(0);
       releaseRead();
       await expect(inspector.locator('.dashboard-project-memory-body')).toHaveText(entries[0].body);
+      expect(await page.evaluate(() => (window as any).memoryMotionCount)).toBe(motionCount);
       await page
         .getByRole('region', { name: '项目记忆列表' })
         .getByText('项目记忆 2', { exact: true })
         .click();
       await expect(inspector.locator('.dashboard-project-memory-body')).toHaveText(entries[1].body);
       expect(reads).toBe(3);
+      expect(await page.evaluate(() => (window as any).memoryMotionCount)).toBeGreaterThan(
+        motionCount,
+      );
     }
   });
 }

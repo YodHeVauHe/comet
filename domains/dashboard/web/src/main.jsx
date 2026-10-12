@@ -98,6 +98,7 @@ import {
 } from './dashboard-modal.jsx';
 import { useAnimatedNumber } from './use-animated-number.js';
 import { DashboardWorkspaceRegion } from './workspace-layout.jsx';
+import { useDashboardMotion } from './dashboard-motion.jsx';
 import {
   dashboardChangeKey,
   dashboardResponseError,
@@ -6095,9 +6096,11 @@ function ProjectKnowledgeRegistry({
     stateFilter === 'all'
       ? records
       : records.filter((record) => projectKnowledgeStateMatches(record, stateFilter));
+  const categoryMotion = useDashboardMotion(categoryFilter, 'panel');
+  const tabMotion = useDashboardMotion(workspaceTab, 'tab');
 
   return (
-    <div className="dashboard-knowledge-registry">
+    <div ref={tabMotion} data-dashboard-motion="tab" className="dashboard-knowledge-registry">
       <aside className="dashboard-knowledge-explorer" aria-label={t('知识分类')}>
         <div className="dashboard-knowledge-explorer-search">
           <Input
@@ -6150,7 +6153,12 @@ function ProjectKnowledgeRegistry({
         </div>
       </aside>
 
-      <section className="dashboard-knowledge-ledger" aria-labelledby="knowledge-ledger-title">
+      <section
+        ref={categoryMotion}
+        data-dashboard-motion="panel"
+        className="dashboard-knowledge-ledger"
+        aria-labelledby="knowledge-ledger-title"
+      >
         <header className="dashboard-knowledge-ledger-toolbar">
           <div>
             <span className="dashboard-contextual-title">
@@ -6327,6 +6335,7 @@ function ProjectKnowledgeInspector({
   onInvoke,
 }) {
   useDashboardLanguage();
+  const detailMotion = useDashboardMotion(record?.id ?? '', 'detail');
   if (!record) {
     return (
       <aside className="dashboard-knowledge-inspector is-empty" aria-label={t('记录详情')}>
@@ -6355,7 +6364,12 @@ function ProjectKnowledgeInspector({
     record.authority === 'user' && (sources.length === 0 || verification.length === 0);
 
   return (
-    <aside className="dashboard-knowledge-inspector" aria-label={t('记录详情')}>
+    <aside
+      ref={detailMotion}
+      data-dashboard-motion="detail"
+      className="dashboard-knowledge-inspector"
+      aria-label={t('记录详情')}
+    >
       <header>
         <div>
           <h3>{knowledgeText(record, record.title)}</h3>
@@ -6607,8 +6621,11 @@ function ProjectKnowledgeSources({
   onSelectRecord,
 }) {
   useDashboardLanguage();
+  const tabMotion = useDashboardMotion('sources', 'tab');
   return (
     <section
+      ref={tabMotion}
+      data-dashboard-motion="tab"
       className="dashboard-knowledge-single-view dashboard-knowledge-source-view"
       aria-label={t('检索语料')}
     >
@@ -6706,6 +6723,7 @@ function ProjectKnowledgeQuery({
   queryCandidateCount,
 }) {
   useDashboardLanguage();
+  const tabMotion = useDashboardMotion('query', 'tab');
   const [selectedResult, setSelectedResult] = useState(null);
   const [resultPreview, setResultPreview] = useState({ status: 'idle' });
   useEffect(() => {
@@ -6724,7 +6742,12 @@ function ProjectKnowledgeQuery({
     };
   }, [selectedResult]);
   return (
-    <section className="dashboard-knowledge-query-view" aria-label={t('检索测试')}>
+    <section
+      ref={tabMotion}
+      data-dashboard-motion="tab"
+      className="dashboard-knowledge-query-view"
+      aria-label={t('检索测试')}
+    >
       <div className="dashboard-knowledge-query-form">
         <Input.TextArea
           value={queryText}
@@ -7039,6 +7062,7 @@ function projectMemoryTypeLabel(type) {
 
 function ProjectMemoryPanel({ summary, readOnly = false, onInvoke }) {
   const dashboardLanguage = useDashboardLanguage();
+  const tabMotion = useDashboardMotion('project-memory', 'tab');
   const [searchText, setSearchText] = useState('');
   const [selectedSlug, setSelectedSlug] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -7067,6 +7091,7 @@ function ProjectMemoryPanel({ summary, readOnly = false, onInvoke }) {
     visibleEntries.find((entry) => entry.slug === selectedSlug) ?? visibleEntries[0] ?? null;
   const selectedKey = selectedEntry?.slug ?? null;
   const directory = summary?.directory ?? '';
+  const detailMotion = useDashboardMotion(`${directory}:${selectedKey ?? ''}`, 'detail');
   const currentDetail =
     detail?.directory === directory && detail?.value?.slug === selectedKey ? detail.value : null;
   useEffect(() => {
@@ -7105,7 +7130,7 @@ function ProjectMemoryPanel({ summary, readOnly = false, onInvoke }) {
         '还没有项目记忆。任务结束时 Agent 会把验证过、可复用的经验通过 comet knowledge remember 写入这里。',
       );
   return (
-    <div className="dashboard-project-memory">
+    <div ref={tabMotion} data-dashboard-motion="tab" className="dashboard-project-memory">
       <section className="dashboard-memory-registry" aria-label={t('项目记忆列表')}>
         <div className="dashboard-memory-registry-toolbar">
           <div>
@@ -7213,7 +7238,12 @@ function ProjectMemoryPanel({ summary, readOnly = false, onInvoke }) {
           </div>
         )}
       </section>
-      <aside className="dashboard-memory-inspector" aria-label={t('项目记忆详情')}>
+      <aside
+        ref={detailMotion}
+        data-dashboard-motion="detail"
+        className="dashboard-memory-inspector"
+        aria-label={t('项目记忆详情')}
+      >
         {selectedEntry ? (
           <>
             <div className="dashboard-memory-inspector-head">
@@ -7308,6 +7338,7 @@ function ProjectMemoryPanel({ summary, readOnly = false, onInvoke }) {
 
 function ProjectKnowledgeCenter({ page, data, readOnly = false, onInvoke }) {
   const dashboardLanguage = useDashboardLanguage();
+  const pageMotion = useDashboardMotion('project-knowledge', 'page');
   const snapshot = data && typeof data === 'object' ? data : {};
   const [workspaceTab, setWorkspaceTab] = useState('model');
   const [recordSearchText, setRecordSearchText] = useState('');
@@ -7548,7 +7579,11 @@ function ProjectKnowledgeCenter({ page, data, readOnly = false, onInvoke }) {
         : projectKnowledgeTypeLabel(categoryFilter);
 
   return (
-    <div className="dashboard-tool-page dashboard-tool-page-knowledge min-w-0">
+    <div
+      ref={pageMotion}
+      data-dashboard-motion="page"
+      className="dashboard-tool-page dashboard-tool-page-knowledge min-w-0"
+    >
       <header className="dashboard-knowledge-workspace-head" aria-label={t('项目规则状态与操作')}>
         <div className="dashboard-contextual-title">
           <span
@@ -7910,6 +7945,7 @@ function ProjectKnowledgeCenter({ page, data, readOnly = false, onInvoke }) {
 
 function PersonalMemoryCenter({ data, readOnly = false, onInvoke }) {
   useDashboardLanguage();
+  const pageMotion = useDashboardMotion('personal-memory', 'page');
   const [editingRecord, setEditingRecord] = useState(null);
   const [correctionText, setCorrectionText] = useState('');
   const [correctionSaving, setCorrectionSaving] = useState(false);
@@ -7997,6 +8033,8 @@ function PersonalMemoryCenter({ data, readOnly = false, onInvoke }) {
     visibleMemoryRecords.find((record) => record.id === selectedMemoryId) ??
     visibleMemoryRecords[0] ??
     null;
+  const filterMotion = useDashboardMotion(memoryFilter, 'tab');
+  const detailMotion = useDashboardMotion(selectedRecord?.id ?? '', 'detail');
   const visibleMemoryKey = visibleMemoryRecords.map((record) => record.id).join('|');
   const memoryEmptyDescription = memoryQuery.trim()
     ? t('没有匹配的个人记忆')
@@ -8142,7 +8180,11 @@ function PersonalMemoryCenter({ data, readOnly = false, onInvoke }) {
     );
   };
   return (
-    <div className="dashboard-tool-page dashboard-tool-page-memory min-w-0">
+    <div
+      ref={pageMotion}
+      data-dashboard-motion="page"
+      className="dashboard-tool-page dashboard-tool-page-memory min-w-0"
+    >
       <PluginCenterHeader
         meta={[
           {
@@ -8311,7 +8353,12 @@ function PersonalMemoryCenter({ data, readOnly = false, onInvoke }) {
             </span>
           </div>
         </aside>
-        <section className="dashboard-memory-registry" aria-label={t('个人记忆列表')}>
+        <section
+          ref={filterMotion}
+          data-dashboard-motion="tab"
+          className="dashboard-memory-registry"
+          aria-label={t('个人记忆列表')}
+        >
           <div className="dashboard-memory-registry-toolbar">
             <div>
               <span className="dashboard-contextual-title">
@@ -8357,7 +8404,12 @@ function PersonalMemoryCenter({ data, readOnly = false, onInvoke }) {
             )}
           </div>
         </section>
-        <aside className="dashboard-memory-inspector" aria-label={t('记忆应用详情')}>
+        <aside
+          ref={detailMotion}
+          data-dashboard-motion="detail"
+          className="dashboard-memory-inspector"
+          aria-label={t('记忆应用详情')}
+        >
           {selectedRecord ? (
             <>
               <div className="dashboard-memory-inspector-head">

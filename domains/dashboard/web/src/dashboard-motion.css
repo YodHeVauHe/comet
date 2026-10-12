@@ -1,6 +1,8 @@
 .any-workspace,
 .dashboard-eval-page,
 .dashboard-eval-drawer,
+.dashboard-tool-page-memory,
+.dashboard-tool-page-knowledge,
 .any-detail-drawer {
   --dashboard-motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -13,12 +15,29 @@
 .any-workspace :is(.any-active-list, .any-history, .any-artifact-list) > button,
 .any-inspector-inner :is(.any-evidence-card, .any-history-evidence),
 .dashboard-eval-page .dashboard-eval-run-entry.ant-btn,
+.dashboard-tool-page-memory
+  :is(.dashboard-memory-filter-rail nav button, .dashboard-memory-table-row),
+.dashboard-tool-page-knowledge
+  :is(
+    .dashboard-knowledge-tabs button,
+    .dashboard-knowledge-category,
+    .dashboard-knowledge-ledger-row,
+    .dashboard-project-memory-row
+  ),
 .dashboard-eval-page .ant-table-tbody > tr > td {
   transition:
     background-color 160ms ease,
     border-color 160ms ease,
     box-shadow 200ms var(--dashboard-motion-ease),
     transform 160ms var(--dashboard-motion-ease);
+}
+
+.dashboard-tool-page-memory .dashboard-memory-filter-rail nav button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+.dashboard-tool-page-knowledge .dashboard-knowledge-tabs button::after {
+  transition: background-color 160ms ease;
 }
 
 .any-workspace .any-app-row:hover {
@@ -59,6 +78,8 @@
   .any-inspector-inner *,
   .dashboard-eval-page *,
   .dashboard-eval-drawer *,
+  .dashboard-tool-page-memory *,
+  .dashboard-tool-page-knowledge *,
   .any-detail-drawer * {
     transition-duration: 0s !important;
     animation-duration: 0s !important;
