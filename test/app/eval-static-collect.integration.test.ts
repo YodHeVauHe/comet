@@ -273,12 +273,14 @@ describe('packaged static collect', () => {
     expect(sourceCollected.stdout).toContain('- inferred-source');
     await fs.rm(manifest);
 
+    // 样本生成器独立准备依赖；消费者的无 venv、无同步和无网络约束继续保留。
+    const producer = await fs.mkdtemp(path.join(os.tmpdir(), 'comet-eval-generation-producer-'));
+    temporary.push(producer);
     const generated = run(
       'uv',
       [
         'run',
-        '--offline',
-        '--no-sync',
+        '--locked',
         'python',
         '-c',
         [
@@ -288,7 +290,12 @@ describe('packaged static collect', () => {
         owner,
       ],
       path.resolve('eval'),
-      isolatedEnv,
+      {
+        ...isolatedEnv,
+        UV_PROJECT_ENVIRONMENT: path.join(producer, 'venv'),
+        UV_OFFLINE: undefined,
+        UV_NO_SYNC: undefined,
+      },
     );
     expect(generated.status, `${generated.stdout}\n${generated.stderr}`).toBe(0);
 
