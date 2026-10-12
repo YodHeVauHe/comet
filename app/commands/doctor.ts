@@ -14,6 +14,7 @@ import {
   inspectCodegraphIntegration,
   inspectCodegraphIndex,
   repairCodegraphIndex,
+  type CodegraphAgentDiagnostic,
   type CodegraphIntegrationDiagnostic,
 } from '../../domains/integrations/codegraph.js';
 import {
@@ -1151,6 +1152,12 @@ async function checkCometYamlValidity(projectPath: string): Promise<CheckResult[
   return results;
 }
 
+function describeCodegraphRegistration(agent: CodegraphAgentDiagnostic): string {
+  if (agent.registered === 'unknown') return 'unreadable config';
+  if (agent.registered !== true) return 'not registered';
+  return agent.valid ? 'registered' : 'invalid entry';
+}
+
 function codegraphCheckResults(diagnostic: CodegraphIntegrationDiagnostic): CheckResult[] {
   const cliResult: CheckResult = {
     check: 'CodeGraph CLI',
@@ -1181,10 +1188,7 @@ function codegraphCheckResults(diagnostic: CodegraphIntegrationDiagnostic): Chec
     diagnostic.agents.length === 0
       ? 'no supported Agent configuration detected'
       : diagnostic.agents
-          .map(
-            (agent) =>
-              `${agent.name}: ${agent.registered ? (agent.valid ? 'registered' : 'invalid entry') : 'not registered'}`,
-          )
+          .map((agent) => `${agent.name}: ${describeCodegraphRegistration(agent)}`)
           .join('; ');
   const mcpResult: CheckResult = {
     check: 'CodeGraph MCP registration',

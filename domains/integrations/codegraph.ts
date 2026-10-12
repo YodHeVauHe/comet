@@ -44,7 +44,7 @@ interface CodegraphAgentDiagnostic {
   name: string;
   scope: 'global' | 'project' | 'both';
   configPath: string | null;
-  registered: boolean;
+  registered: boolean | 'unknown';
   valid: boolean;
   effective: boolean;
   detail: string;
@@ -143,21 +143,101 @@ function recordValue(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function readJsonString(source: string, start: number): { text: string; nextIndex: number } {
+  let index = start + 1;
+  while (index < source.length) {
+    if (source[index] === '\\') {
+      index += 2;
+      continue;
+    }
+    if (source[index] === '"') {
+      return { text: source.slice(start, index + 1), nextIndex: index + 1 };
+    }
+    index += 1;
+  }
+  return { text: source.slice(start), nextIndex: source.length };
+}
+
+function skipJsonLineComment(source: string, start: number): number {
+  let index = start;
+  while (index < source.length && source[index] !== '\n') index += 1;
+  return index;
+}
+
+function skipJsonBlockComment(source: string, start: number): number {
+  const end = source.indexOf('*/', start + 2);
+  return end === -1 ? source.length : end + 2;
+}
+
+function nextJsonTokenIndex(source: string, start: number): number {
+  let index = start;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === ' ' || char === '\t' || char === '\n' || char === '\r') {
+      index += 1;
+      continue;
+    }
+    if (char === '/' && source[index + 1] === '/') {
+      index = skipJsonLineComment(source, index);
+      continue;
+    }
+    if (char === '/' && source[index + 1] === '*') {
+      index = skipJsonBlockComment(source, index);
+      continue;
+    }
+    return index;
+  }
+  return index;
+}
+
+function normalizeJsonc(source: string): string {
+  let normalized = '';
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === '"') {
+      const stringToken = readJsonString(source, index);
+      normalized += stringToken.text;
+      index = stringToken.nextIndex;
+      continue;
+    }
+    if (char === '/' && source[index + 1] === '/') {
+      index = skipJsonLineComment(source, index);
+      continue;
+    }
+    if (char === '/' && source[index + 1] === '*') {
+      index = skipJsonBlockComment(source, index);
+      continue;
+    }
+    if (char === ',') {
+      const nextIndex = nextJsonTokenIndex(source, index + 1);
+      if (source[nextIndex] === '}' || source[nextIndex] === ']') {
+        index += 1;
+        continue;
+      }
+    }
+    normalized += char;
+    index += 1;
+  }
+  return normalized;
+}
+
 function parseJsonLike(source: string): unknown {
   try {
     return JSON.parse(source) as unknown;
   } catch {
-    const withoutComments = source
-      .replace(/\/\*[\s\S]*?\*\//gu, '')
-      .replace(/^\s*\/\/.*$/gmu, '')
-      .replace(/,\s*([}\]])/gu, '$1');
-    return JSON.parse(withoutComments) as unknown;
+    return JSON.parse(normalizeJsonc(source)) as unknown;
   }
+}
+
+function jsonMcpServers(config: Record<string, unknown> | null): Record<string, unknown> | null {
+  const mcp = recordValue(config?.mcp);
+  return recordValue(config?.mcpServers) ?? recordValue(mcp?.servers) ?? mcp;
 }
 
 function inspectJsonMcpEntry(source: string): CodegraphMcpEntryInspection {
   const config = recordValue(parseJsonLike(source));
-  const servers = recordValue(config?.mcpServers) ?? recordValue(config?.mcp);
+  const servers = jsonMcpServers(config);
   const entry = servers?.codegraph;
   if (entry === undefined) return { present: false, valid: false };
   const entryRecord = recordValue(entry);
@@ -402,6 +482,40 @@ function codegraphAgentDefinitions(
   ];
 }
 
+function codegraphRegistration(
+  inspections: Array<{ inspection: CodegraphMcpEntryInspection }>,
+): boolean | 'unknown' {
+  if (inspections.some(({ inspection }) => inspection.present)) return true;
+  if (inspections.some(({ inspection }) => inspection.error !== undefined)) return 'unknown';
+  return false;
+}
+
+function codegraphAgentDetail(input: {
+  registered: boolean | 'unknown';
+  valid: boolean;
+  configPath: string;
+  disabled: boolean;
+  readError: string | undefined;
+}): string {
+  if (input.registered === 'unknown') {
+    return input.readError ?? `unable to read ${input.configPath}`;
+  }
+  if (input.registered !== true) {
+    return `CodeGraph MCP is not registered at ${input.configPath}`;
+  }
+  if (input.valid) return `CodeGraph MCP is registered at ${input.configPath}`;
+  if (input.disabled) return `CodeGraph MCP entry at ${input.configPath} is disabled`;
+  return `CodeGraph MCP entry at ${input.configPath} does not point to the CodeGraph server`;
+}
+
+function codegraphMcpStatus(agents: CodegraphAgentDiagnostic[]): CodegraphMcpStatus {
+  if (agents.length === 0) return 'not_detected';
+  const registeredCount = agents.filter((agent) => agent.registered === true).length;
+  if (registeredCount === agents.length) return 'registered';
+  if (registeredCount > 0) return 'partially_registered';
+  return agents.every((agent) => agent.registered === 'unknown') ? 'unavailable' : 'not_registered';
+}
+
 function inspectCodegraphMcp(
   projectPath: string,
   scope: InstallScope,
@@ -435,7 +549,7 @@ function inspectCodegraphMcp(
     const inspections = definition.mergeConfigLayers
       ? mergeCodegraphConfigLayers(inspectedCandidates)
       : inspectedCandidates;
-    const registered = inspections.some(({ inspection }) => inspection.present);
+    const registered = codegraphRegistration(inspections);
     const valid = inspections.some(({ inspection }) => inspection.valid);
     const registeredScopes = new Set(
       inspections
@@ -466,28 +580,18 @@ function inspectCodegraphMcp(
       registered,
       valid,
       effective,
-      detail: registered
-        ? valid
-          ? `CodeGraph MCP is registered at ${configPath}`
-          : inspections.some(({ inspection }) => inspection.disabled)
-            ? `CodeGraph MCP entry at ${configPath} is disabled`
-            : `CodeGraph MCP entry at ${configPath} does not point to the CodeGraph server`
-        : (errors[0] ?? `CodeGraph MCP is not registered at ${configPath}`),
+      detail: codegraphAgentDetail({
+        registered,
+        valid,
+        configPath,
+        disabled: inspections.some(({ inspection }) => inspection.disabled),
+        readError: errors[0],
+      }),
     });
     effectiveForAgent[definition.id] = effective;
   }
 
-  const registeredCount = agents.filter((agent) => agent.registered).length;
-  const mcpStatus: CodegraphMcpStatus =
-    agents.length === 0
-      ? 'not_detected'
-      : registeredCount === 0
-        ? 'not_registered'
-        : registeredCount === agents.length
-          ? 'registered'
-          : 'partially_registered';
-
-  return { mcpStatus, agents, effectiveForAgent };
+  return { mcpStatus: codegraphMcpStatus(agents), agents, effectiveForAgent };
 }
 
 function projectIndexStatus(

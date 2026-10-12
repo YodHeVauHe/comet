@@ -80,6 +80,7 @@ import {
   inspectCodegraphIntegration,
   installCodegraph,
   resolveCodegraphCommand,
+  type CodegraphAgentDiagnostic,
 } from '../../domains/integrations/codegraph.js';
 import { printVersionInfo } from '../../platform/version/version.js';
 import { printCometBanner } from '../cli/comet-banner.js';
@@ -530,6 +531,12 @@ function displaySummary(
     }
   }
   console.log();
+}
+
+function describeCodegraphRegistration(agent: CodegraphAgentDiagnostic): string {
+  if (agent.registered === 'unknown') return 'unreadable config';
+  if (agent.registered === true) return 'registered';
+  return 'not registered';
 }
 
 export async function initCommand(
@@ -1141,8 +1148,7 @@ export async function initCommand(
           : 'no supported Agent configuration detected'
         : codegraph.agents
             .map(
-              (agent) =>
-                `${agent.name}: ${agent.registered ? 'registered' : 'not registered'} (${agent.scope})`,
+              (agent) => `${agent.name}: ${describeCodegraphRegistration(agent)} (${agent.scope})`,
             )
             .join('; ');
     log(`  CodeGraph CLI: ${codegraph.cliStatus}`);

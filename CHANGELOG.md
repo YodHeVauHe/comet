@@ -2,6 +2,12 @@
 
 All notable changes to @rpamis/comet will be documented in this file.
 
+## What's Changed [0.4.6] - 2026-10-12
+
+### Fixed
+
+- **OpenCode CodeGraph registration**: `comet doctor` reads JSONC without treating glob text inside strings as comments, so permission patterns such as `/mnt/**` no longer delete the surrounding OpenCode configuration. OpenCode v2 servers under `mcp.servers` are reported as registered when the command points at CodeGraph. A configuration that cannot be parsed is reported as unknown instead of unregistered (#479).
+
 ## What's Changed [0.4.5] - 2026-10-10
 
 ### Added
